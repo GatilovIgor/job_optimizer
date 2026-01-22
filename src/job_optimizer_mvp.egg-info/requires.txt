@@ -1,0 +1,16 @@
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.8.2
+python-dotenv==1.0.1
+pandas==2.2.2
+SQLAlchemy==2.0.32
+psycopg2-binary==2.9.9
+qdrant-client==1.11.1
+sentence-transformers==3.0.1
+langdetect==1.0.9
+
+[dev]
+pytest==8.3.2
+black==24.8.0
+ruff==0.6.2
+mypy==1.11.2
