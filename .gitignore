@@ -21,7 +21,7 @@ venv/
 # =====================
 # Data (raw & generated)
 # =====================
-data/
+dataset/
 *.csv
 *.parquet
 
