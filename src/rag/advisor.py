@@ -1,36 +1,56 @@
 from typing import List, Dict
+import time
 from src.rag.llm import LocalLLM
+from src.api.models import VacancyIn, VacancyOut
+from src.common.text import basic_issues, heuristic_quality_score, normalize_text
 
 
 class VacancyAdvisor:
     def __init__(self):
-        # Инициализируем локальную LLM
-        # Она сама скачает модель при первом запуске
         self.llm = LocalLLM()
 
-    def analyze(self, user_vacancy: str, references: List[Dict]) -> Dict:
+    def process_single_vacancy(self, vac_input: VacancyIn, retriever) -> VacancyOut:
         """
-        Принимает текст вакансии пользователя и список успешных примеров.
-        Генерирует советы с помощью LLM.
+        Полный цикл обработки одной вакансии: Анализ -> Поиск референсов -> Рерайт LLM
         """
-        if not references:
-            return {
-                "ai_advice_text": "К сожалению, мы не нашли похожих успешных вакансий для сравнения. Попробуйте изменить название."
+        start_time = time.time()
+
+        # 1. Нормализация и базовый анализ
+        clean_text = normalize_text(vac_input.text)
+        current_issues = basic_issues(clean_text)
+
+        # 2. Поиск референсов (RAG)
+        # Если есть retriever, ищем. Если нет — пустой список.
+        query = f"{vac_input.title or ''} {clean_text[:500]}"
+        references = retriever.search(query, limit=3) if retriever else []
+
+        # 3. Генерация через LLM
+        # Передаем словарь, чтобы LLM было удобнее
+        user_vac_dict = {"title": vac_input.title, "text": clean_text}
+
+        llm_result = self.llm.generate_rewrite(
+            user_vacancy=user_vac_dict,
+            references=references,
+            issues=current_issues
+        )
+
+        # 4. Расчет итогового скора (эвристика над результатом, пока упрощенно)
+        # В идеале надо проверять уже новый текст, но для MVP оценим прогресс
+        final_text = llm_result.get("rewritten_text", clean_text)
+        new_issues = basic_issues(final_text)
+        quality_score = heuristic_quality_score(final_text, new_issues)
+
+        # 5. Сборка ответа
+        return VacancyOut(
+            input_id=vac_input.input_id,
+            rewritten_text=final_text,
+            rewrite_notes=llm_result.get("rewrite_notes", []),
+            issues=current_issues,  # Возвращаем исходные проблемы, чтобы клиент видел, что исправляли
+            quality_score=quality_score,
+            safety_flags=llm_result.get("safety_flags", []),
+            low_confidence_retrieval=(len(references) == 0),
+            debug={
+                "processing_time": round(time.time() - start_time, 2),
+                "top_reference": references[0]['title'] if references else None
             }
-
-        print("🤖 AI is generating advice...")
-
-        # Запускаем генерацию
-        ai_recommendation = self.llm.generate_advice(user_vacancy, references)
-
-        return {
-            "ai_advice_text": ai_recommendation
-        }
-
-
-# --- ТЕСТ ---
-if __name__ == "__main__":
-    advisor = VacancyAdvisor()
-    refs = [{"title": "Senior Python Developer"}, {"title": "Python Team Lead"}]
-    res = advisor.analyze("Ищем питониста", refs)
-    print(res['ai_advice_text'])
+        )
