@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import os
+import html
 
 # --- КОНФИГУРАЦИЯ ---
 st.set_page_config(
@@ -81,7 +82,7 @@ if submitted:
                         res = data["results"][0]
 
                         # Метрики
-                        score = res['quality_score']
+                        score = res.get('quality_score', 0)
                         color = "green" if score > 80 else "orange" if score > 50 else "red"
 
                         col_m1, col_m2, col_m3 = st.columns(3)
@@ -99,25 +100,41 @@ if submitted:
 
                         with col_left:
                             st.subheader("🔍 Анализ проблем")
-                            if res["issues"]:
+                            if res.get("issues"):
                                 for issue in res["issues"]:
                                     st.warning(f"❌ {issue}")
                             else:
                                 st.success("Критических проблем не найдено!")
 
                             st.subheader("💡 Что улучшено")
-                            for note in res["rewrite_notes"]:
-                                st.info(f"✅ {note}")
+                            if res.get("rewrite_notes"):
+                                for note in res["rewrite_notes"]:
+                                    st.info(f"✅ {note}")
 
                         with col_right:
                             st.subheader("✨ Готовый текст")
-                            st.text_area("Скопируйте результат:", value=res["rewritten_text"], height=600)
+
+                            # --- ИСПРАВЛЕНИЕ: Декодирование HTML ---
+                            # Превращаем &lt;li&gt; обратно в <li>
+                            raw_html_content = html.unescape(res["rewritten_text"])
+
+                            # 1. Рендерим красивый вид (как на сайте)
+                            st.markdown(
+                                f"<div style='background:white; color:black; padding:20px; border-radius:10px; border:1px solid #ddd;'>{raw_html_content}</div>",
+                                unsafe_allow_html=True
+                            )
+
+                            st.divider()
+
+                            # 2. Показываем исходный код для копирования
+                            with st.expander("Показать HTML код для вставки"):
+                                st.code(raw_html_content, language="html")
 
                             st.download_button(
-                                label="📥 Скачать (.txt)",
-                                data=res["rewritten_text"],
-                                file_name="vacancy_optimized.txt",
-                                mime="text/plain"
+                                label="📥 Скачать (.html)",
+                                data=raw_html_content,
+                                file_name="vacancy_optimized.html",
+                                mime="text/html"
                             )
 
                         with st.expander("🔧 Технические детали"):
@@ -129,6 +146,7 @@ if submitted:
 
             except Exception as e:
                 st.error(f"Ошибка соединения с API: {e}")
+                st.info("Убедитесь, что сервер запущен: python -m src.api.main")
 
 else:
     if not st.session_state["title"]:
