@@ -4,102 +4,64 @@ import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 
-# --- МАГИЯ ПУТЕЙ ---
 root_dir = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(root_dir))
-# -------------------
 
 from src.rag.retriever import VacancyRetriever
 from src.rag.advisor import VacancyAdvisor
-from src.api.models import RewriteRequest, RewriteResponse, VacancyIn, AnalyzeRequest
+from src.api.models import RewriteRequest, RewriteResponse, VacancyOut
 
-# Глобальные переменные
 retriever = None
 advisor = None
 
 
-# --- НОВЫЙ СПОСОБ ЗАПУСКА (LIFESPAN) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Эта функция выполняется один раз при старте приложения.
-    Здесь мы загружаем тяжелые нейросети в память.
-    """
     global retriever, advisor
-    print("🚀 Initializing AI Engine (Lifespan)...")
-
-    # 1. Проверяем наличие датасета
+    print("🚀 Starting AI Engine...")
     data_path = root_dir / "dataset" / "vacancies_processed.parquet"
-    retriever_path = None
 
-    if data_path.exists():
-        retriever_path = str(data_path)
-    else:
-        print(f"⚠️ Warning: Dataset not found at {data_path}. RAG will be empty.")
-
-    # 2. Инициализация моделей
     try:
-        retriever = VacancyRetriever(data_path=retriever_path)
+        retriever = VacancyRetriever(data_path=str(data_path) if data_path.exists() else None)
         advisor = VacancyAdvisor()
-        print("✅ AI Ready and Loaded!")
+        print("✅ AI Ready!")
     except Exception as e:
-        print(f"❌ Error initializing AI: {e}")
-
-    # Здесь приложение работает...
+        print(f"❌ Init Error: {e}")
     yield
-
-    # Здесь код выполнится при выключении (очистка памяти и т.д.)
-    print("🛑 AI Engine stopped.")
+    print("🛑 AI Stopped.")
 
 
-# Подключаем lifespan в приложение
-app = FastAPI(title="Job Optimizer AI (MVP)", lifespan=lifespan)
+app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/rewrite-batch", response_model=RewriteResponse)
-async def rewrite_batch_vacancies(req: RewriteRequest):
-    """
-    Основной метод: принимает список вакансий -> возвращает список улучшенных.
-    """
+async def rewrite_batch(req: RewriteRequest):
     if not advisor:
-        raise HTTPException(status_code=503, detail="AI System is still loading...")
+        raise HTTPException(status_code=503, detail="AI loading...")
 
     results = []
-    print(f"📥 Batch request received: {len(req.vacancies)} items.")
+    print(f"📥 Processing {len(req.vacancies)} vacancies...")
 
-    for vac_in in req.vacancies:
+    for vac in req.vacancies:
         try:
-            # Запускаем полный цикл обработки
-            result = advisor.process_single_vacancy(vac_in, retriever)
-            results.append(result)
+            # Основная обработка
+            res = advisor.process_single_vacancy(vac, retriever)
+            results.append(res)
         except Exception as e:
-            print(f"❌ Error processing {vac_in.input_id}: {e}")
-            continue
+            print(f"❌ Error processing vacancy {vac.input_id}: {e}")
+            # Возвращаем заглушку с ошибкой
+            error_res = VacancyOut(
+                input_id=vac.input_id,
+                rewritten_text=f"Ошибка обработки: {str(e)}",
+                rewrite_notes=["Internal Error"],
+                issues=[],
+                quality_score=0,
+                safety_flags=[],
+                low_confidence_retrieval=True
+            )
+            results.append(error_res)
 
     return RewriteResponse(results=results)
-
-
-@app.post("/analyze")
-async def analyze_legacy(req: AnalyzeRequest):
-    """
-    Упрощенный метод (Legacy).
-    """
-    if not advisor:
-        raise HTTPException(status_code=503, detail="AI System is still loading...")
-
-    vac_in = VacancyIn(
-        input_id="legacy_request",
-        title=req.title,
-        text=req.description or req.title
-    )
-
-    res = advisor.process_single_vacancy(vac_in, retriever)
-
-    return {
-        "input": req.title,
-        "advice": "\n".join(res.rewrite_notes),
-        "similar_top_cases": [res.debug.get("top_reference", "N/A")]
-    }
 
 
 if __name__ == "__main__":

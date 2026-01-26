@@ -3,102 +3,100 @@ import requests
 import os
 import html
 
-# --- КОНФИГУРАЦИЯ ---
 st.set_page_config(page_title="Job Optimizer AI", page_icon="🚀", layout="wide")
 
-# Стили с исправленной видимостью
 st.markdown("""
 <style>
-    .main-header { font-size: 2.5rem; font-weight: 700; color: #FF4B4B; text-align: center; margin-bottom: 5px; }
-    .sub-header { font-size: 1.1rem; color: #ccc; text-align: center; margin-bottom: 30px; }
-    .metric-card { 
-        background-color: #ffffff; 
-        padding: 20px; 
-        border-radius: 15px; 
-        text-align: center; 
-        border: 2px solid #FF4B4B;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-card h3 { color: #333333 !important; margin-bottom: 0; }
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #FF4B4B; text-align: center; margin-bottom: 20px; }
     .result-box {
-        background: white; 
-        color: black; 
-        padding: 25px; 
-        border-radius: 10px; 
-        border: 1px solid #ddd;
-        font-family: sans-serif;
-        line-height: 1.6;
+        background: white; color: black; padding: 25px; 
+        border-radius: 10px; border: 1px solid #ddd; line-height: 1.6;
     }
+    /* Делаем метрику крупной */
+    [data-testid="stMetricValue"] { font-size: 3rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-if "title" not in st.session_state: st.session_state["title"] = ""
-if "text" not in st.session_state: st.session_state["text"] = ""
+# --- STATE ---
+if "title_input" not in st.session_state: st.session_state.title_input = ""
+if "text_input" not in st.session_state: st.session_state.text_input = ""
+if "spec_input" not in st.session_state: st.session_state.spec_input = ""
 
 st.markdown('<div class="main-header">🚀 Job Optimizer AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Мгновенное превращение текста вакансии в профессиональный оффер</div>',
-            unsafe_allow_html=True)
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("📝 Ввод данных")
-    with st.form("input_form"):
-        title_val = st.text_input("Название должности", value=st.session_state["title"])
-        text_val = st.text_area("Текст вакансии", value=st.session_state["text"], height=350)
-        submitted = st.form_submit_button("✨ Улучшить вакансию", type="primary")
+    if st.button("Пример: Продажи"):
+        st.session_state.title_input = "Менеджер по продажам"
+        st.session_state.text_input = "Требуется активный сотрудник. Холодные звонки, работа с базой. График 5/2. Оклад + процент."
+        st.session_state.spec_input = "Продажи"
+        st.rerun()
 
-# --- ЛОГИКА ---
+    with st.form("input_form"):
+        title_val = st.text_input("Должность", value=st.session_state.title_input)
+        spec_val = st.text_input("Сфера (IT, Ритейл...)", value=st.session_state.spec_input)
+        text_val = st.text_area("Текст вакансии", value=st.session_state.text_input, height=300)
+        submitted = st.form_submit_button("✨ Улучшить", type="primary")
+
+# --- MAIN ---
 if submitted:
+    st.session_state.title_input = title_val
+    st.session_state.text_input = text_val
+    st.session_state.spec_input = spec_val
+
     if not title_val or not text_val:
-        st.error("Заполните поля!")
+        st.warning("⚠️ Заполните все поля!")
     else:
-        with st.spinner("🧠 Нейросеть анализирует рынок..."):
+        with st.spinner("⚡ Анализ и улучшение..."):
             try:
-                payload = {"vacancies": [{"input_id": "demo", "title": title_val, "text": text_val}]}
-                response = requests.post(f"{API_URL}/rewrite-batch", json=payload, timeout=180)
+                payload = {
+                    "vacancies": [{"input_id": "1", "title": title_val, "specialization": spec_val, "text": text_val}]}
+                response = requests.post(f"{API_URL}/rewrite-batch", json=payload, timeout=120)
 
                 if response.status_code == 200:
                     res = response.json()["results"][0]
 
-                    # Score UI
-                    score = res.get('quality_score', 0)
-                    color = "#28a745" if score > 80 else "#fd7e14" if score > 50 else "#dc3545"
+                    # --- МЕТРИКА РОСТА ---
+                    old_score = res.get('original_score', 0)
+                    new_score = res.get('quality_score', 0)
+                    delta = new_score - old_score
 
-                    col_m1, col_m2, col_m3 = st.columns([1, 2, 1])
-                    with col_m2:
-                        st.markdown(f"""
-                        <div class="metric-card">
-                            <h3>Оценка качества текста</h3>
-                            <h1 style="color: {color}; font-size: 4rem; margin: 0;">{score}/100</h1>
-                        </div>
-                        """, unsafe_allow_html=True)
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        st.metric(
+                            label="Рост качества вакансии",
+                            value=f"{new_score}/100",
+                            delta=f"+{delta} баллов" if delta > 0 else f"{delta}",
+                            delta_color="normal"
+                        )
+                        st.caption(f"Было: {old_score}/100 ➔ Стало: {new_score}/100")
 
                     st.divider()
 
-                    col_left, col_right = st.columns(2)
+                    # --- РЕЗУЛЬТАТЫ ---
+                    c_left, c_right = st.columns(2)
 
-                    with col_left:
-                        st.subheader("🔍 Анализ и улучшения")
-                        # Ошибки
+                    with c_left:
+                        st.subheader("🔍 Проблемы исходника")
                         if res.get("issues"):
-                            for issue in res["issues"]:
-                                st.warning(f"⚠️ {issue}")
-                        # Что сделано (теперь на русском)
-                        if res.get("rewrite_notes"):
-                            for note in res["rewrite_notes"]:
-                                st.info(f"✅ {note}")
+                            for issue in res["issues"]: st.warning(f"• {issue}")
+                        else:
+                            st.success("Исходный текст был неплох!")
 
-                    with col_right:
-                        st.subheader("✨ Готовый текст")
-                        # Декодируем и рендерим
-                        raw_html = html.unescape(res["rewritten_text"])
-                        st.markdown(f'<div class="result-box">{raw_html}</div>', unsafe_allow_html=True)
+                    with c_right:
+                        st.subheader("✨ Готовый результат")
+                        safe_html = html.unescape(res["rewritten_text"])
+                        st.markdown(f'<div class="result-box">{safe_html}</div>', unsafe_allow_html=True)
 
-                        st.download_button("📥 Скачать HTML", data=raw_html, file_name="vacancy.html", mime="text/html")
+                        with st.expander("🛠 Что исправил AI"):
+                            for note in res.get("rewrite_notes", []): st.info(f"✅ {note}")
+
+                        st.download_button("📥 Скачать HTML", data=safe_html, file_name="vacancy.html")
 
                 else:
-                    st.error("Ошибка API")
+                    st.error("Ошибка сервера API")
             except Exception as e:
                 st.error(f"Ошибка: {e}")
