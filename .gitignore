@@ -24,6 +24,18 @@ venv/
 dataset/
 *.csv
 *.parquet
+*.json
+*.sql
+
+# =====================
+# AI / Models (ВАЖНО!)
+# =====================
+models/
+*.gguf
+*.bin
+*.safetensors
+*.pth
+qdrant_storage/
 
 # =====================
 # PyCharm

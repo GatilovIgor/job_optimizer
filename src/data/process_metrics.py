@@ -20,6 +20,7 @@ def get_project_root() -> pathlib.Path:
 def clean_text(text):
     if not isinstance(text, str): return ""
     # Убираем HTML заглушки, оставляем только суть
+    # (В вашем случае там заглушки, но на будущее полезно)
     text = re.sub(r'<.*?>', ' ', text)
     return text.strip()
 
@@ -28,7 +29,6 @@ def main():
     print("🧠 Processing Data for ML...")
     root = get_project_root()
 
-    # ВАЖНО: Используем dataset/
     input_file = root / "dataset" / "vacancies_full.parquet"
     output_file = root / "dataset" / "vacancies_processed.parquet"
 
@@ -40,7 +40,8 @@ def main():
     print(f"   Loaded: {len(df)} rows")
 
     # 1. Формируем текст для поиска
-    # Так как описаний нет, используем Title как основной сигнал
+    # Используем Title как основной сигнал (так как описания - заглушки)
+    # Если бы были реальные описания, мы бы чистили их тут.
     df['text_clean'] = df['vacancy_title'].apply(clean_text)
 
     # 2. Считаем Velocity (Метрика успеха)
