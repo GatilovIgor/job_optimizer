@@ -1,12 +1,28 @@
 import pandas as pd
 import numpy as np
-import re
 import pathlib
 from datetime import datetime
+import sys
+
+# Добавляем путь к корню, чтобы видеть src.common
+# (если запускаете через python -m, это может быть не обязательно, но надежно)
+sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent.parent))
+
+# Импортируем вашу функцию очистки
+try:
+    from src.common.text import normalize_text
+except ImportError:
+    # Если запуск не из корня, запасной вариант
+    import re
+
+
+    def normalize_text(t):
+        t = re.sub(r"<[^>]+>", " ", str(t))
+        return re.sub(r"\s+", " ", t).strip()
 
 # --- CONFIG ---
-MIN_DAYS_ACTIVE = 1  # Для демо можно и 1 день
-TOP_QUANTILE = 0.80  # Топ-20% лучших
+MIN_DAYS_ACTIVE = 1
+TOP_QUANTILE = 0.80
 
 
 def get_project_root() -> pathlib.Path:
@@ -17,16 +33,8 @@ def get_project_root() -> pathlib.Path:
     return pathlib.Path.cwd()
 
 
-def clean_text(text):
-    if not isinstance(text, str): return ""
-    # Убираем HTML заглушки, оставляем только суть
-    # (В вашем случае там заглушки, но на будущее полезно)
-    text = re.sub(r'<.*?>', ' ', text)
-    return text.strip()
-
-
 def main():
-    print("🧠 Processing Data for ML...")
+    print("🧠 Processing Data for ML (using common.text)...")
     root = get_project_root()
 
     input_file = root / "dataset" / "vacancies_full.parquet"
@@ -39,29 +47,27 @@ def main():
     df = pd.read_parquet(input_file)
     print(f"   Loaded: {len(df)} rows")
 
-    # 1. Формируем текст для поиска
-    # Используем Title как основной сигнал (так как описания - заглушки)
-    # Если бы были реальные описания, мы бы чистили их тут.
-    df['text_clean'] = df['vacancy_title'].apply(clean_text)
+    # 1. Формируем текст
+    print("   Cleaning text using src.common.text.normalize_text...")
+    df['full_raw_text'] = df['vacancy_title'] + " " + df['vacancy_description'].fillna("")
 
-    # 2. Считаем Velocity (Метрика успеха)
+    # ИСПОЛЬЗУЕМ ВАШУ ФУНКЦИЮ
+    df['text_clean'] = df['full_raw_text'].apply(lambda x: normalize_text(str(x)))
+
+    # 2. Метрики (Velocity)
     now = datetime.now()
     df['start_date'] = df['publication_date'].fillna(df['creation_date'])
-
-    # Избегаем деления на ноль
     df['days_active'] = (now - df['start_date']).dt.days.clip(lower=1)
-
-    # Velocity = Отклики / Дни
     df['velocity'] = df['total_responses'] / df['days_active']
 
-    # 3. Определяем "Чемпионов" (Top Performers)
+    # 3. Чемпионы
     threshold = df['velocity'].quantile(TOP_QUANTILE)
     df['is_top_performer'] = df['velocity'] >= threshold
 
     print(f"   🏆 Top Threshold: > {threshold:.2f} responses/day")
     print(f"   Found {df['is_top_performer'].sum()} top performers.")
 
-    # 4. Сохраняем
+    # 4. Сохранение
     cols = ['vacancy_id', 'vacancy_title', 'text_clean', 'velocity', 'is_top_performer']
     df[cols].to_parquet(output_file, index=False)
 

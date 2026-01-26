@@ -4,31 +4,43 @@ import numpy as np
 
 
 def main():
-    print("🚀 STEP 3: Merge (Bypass Mode)...")
+    print("🚀 STEP 3: Merge (Real Data Mode)...")
 
     # 1. Пути
     root = pathlib.Path(__file__).resolve().parent.parent.parent
     data_dir = root / "dataset"
     facts_file = data_dir / "facts.parquet"
+    desc_file = data_dir / "descriptions.parquet"
     out_file = data_dir / "vacancies_full.parquet"
 
     if not facts_file.exists():
-        print("❌ facts.parquet not found. Run extract_facts.py first!")
+        print(f"❌ facts.parquet not found in {data_dir}. Run extract_facts.py first!")
         return
 
     # 2. Загрузка фактов
     print("   Loading facts...")
-    df = pd.read_parquet(facts_file)
-    print(f"   Loaded {len(df)} rows.")
+    df_facts = pd.read_parquet(facts_file)
+    print(f"   Facts rows: {len(df_facts)}")
 
-    # 3. Генерация заглушки для описания
-    # Мы используем Title как основу, чтобы векторы имели смысл.
-    print("   Generating description placeholders...")
-    df['vacancy_description'] = df['vacancy_title'].apply(
-        lambda x: f"<h1>{x}</h1><p>Full description unavailable due to DB lock.</p>"
-    )
+    # 3. Загрузка и слияние описаний
+    if desc_file.exists():
+        print("   Loading descriptions...")
+        df_desc = pd.read_parquet(desc_file)
+        print(f"   Descriptions rows: {len(df_desc)}")
 
-    # 4. Обработка типов (для совместимости)
+        # Merge: объединяем факты и описания по ID
+        df = pd.merge(df_facts, df_desc, on='vacancy_id', how='left')
+
+        # Если для какой-то вакансии нет описания, пишем текст-заполнитель
+        df['vacancy_description'] = df['vacancy_description'].fillna("Description unavailable")
+        print("   ✅ Merged facts with descriptions.")
+    else:
+        print(f"⚠️ Warning: descriptions.parquet not found in {data_dir}!")
+        print("   Falling back to empty descriptions.")
+        df = df_facts.copy()
+        df['vacancy_description'] = ""
+
+    # 4. Обработка дат
     for col in ['publication_date', 'creation_date']:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors='coerce')
@@ -38,8 +50,7 @@ def main():
 
     print("-" * 30)
     print(f"✅ FINAL SUCCESS! Dataset created: {out_file}")
-    print(f"   Rows: {len(df)}")
-    print(f"   Note: 'vacancy_description' is populated from 'vacancy_title'")
+    print(f"   Total Rows: {len(df)}")
     print("-" * 30)
 
 

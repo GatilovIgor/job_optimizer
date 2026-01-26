@@ -1,73 +1,135 @@
 import streamlit as st
-import sys
-import pathlib
-import time
+import requests
+import os
 
-# Добавляем путь к src, чтобы видеть наши модули
-root = pathlib.Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(root))
+# --- КОНФИГУРАЦИЯ ---
+st.set_page_config(
+    page_title="Job Optimizer AI",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# Стили
+st.markdown("""
+<style>
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #FF4B4B; text-align: center; margin-bottom: 20px; }
+    .sub-header { font-size: 1.2rem; color: #555; text-align: center; margin-bottom: 30px; }
+    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; text-align: center; }
+</style>
+""", unsafe_allow_html=True)
 
-# Импортируем наши "мозги"
-# Используем кэширование Streamlit, чтобы не грузить модель при каждом клике
-@st.cache_resource
-def load_models():
-    print("⏳ Loading Models...")
-    from src.rag.retriever import VacancyRetriever
-    from src.rag.advisor import VacancyAdvisor
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-    data_path = root / "dataset" / "vacancies_processed.parquet"
-    retriever = VacancyRetriever(data_path=str(data_path))
-    advisor = VacancyAdvisor()
-    return retriever, advisor
+# --- Инициализация памяти ---
+if "title" not in st.session_state:
+    st.session_state["title"] = ""
+if "text" not in st.session_state:
+    st.session_state["text"] = ""
 
+# --- Хедер ---
+st.markdown('<div class="main-header">🚀 Job Optimizer AI</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Превратите обычное описание вакансии в магнит для талантов</div>',
+            unsafe_allow_html=True)
 
-# Заголовок страницы
-st.set_page_config(page_title="Job Optimizer AI", layout="wide")
-st.title("🚀 Job Optimizer AI")
-st.markdown("### Улучшите свою вакансию с помощью ИИ и рыночных данных")
-
-# Боковая панель
+# --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
-    st.info("💡 Эта система ищет успешные вакансии в базе и генерирует советы на локальной нейросети.")
+    st.header("📝 Ввод данных")
+    st.caption("Быстрый старт:")
+    col_btn1, col_btn2 = st.columns(2)
 
-# Загрузка моделей (один раз)
-with st.spinner("Загрузка нейросетей (это может занять минуту)..."):
-    retriever, advisor = load_models()
+    if col_btn1.button("Пример: Python"):
+        st.session_state["title"] = "Middle Python Developer"
+        st.session_state["text"] = "Ищем питониста. Надо знать джанго, sql и докер. Зп по рынку. Работа в офисе."
+        st.rerun()
 
-# Форма ввода
-col1, col2 = st.columns(2)
-with col1:
-    title = st.text_input("Название вакансии", value="Senior Python Developer")
-with col2:
-    description = st.text_area("Краткое описание (опционально)", height=100)
+    if col_btn2.button("Пример: Sales"):
+        st.session_state["title"] = "Менеджер по продажам"
+        st.session_state["text"] = "Нужен продажник. Холодные звонки, встречи. Опыт от 1 года. Оклад + %."
+        st.rerun()
 
-if st.button("✨ Проанализировать", type="primary"):
-    if not title:
-        st.error("Введите название вакансии!")
+    with st.form("input_form"):
+        title_val = st.text_input("Название должности", value=st.session_state["title"],
+                                  placeholder="Например: Product Manager")
+        text_val = st.text_area("Текст вакансии", value=st.session_state["text"], height=300,
+                                placeholder="Вставьте описание...")
+        submitted = st.form_submit_button("✨ Улучшить вакансию", type="primary")
+
+# --- ЛОГИКА ---
+if submitted:
+    st.session_state["title"] = title_val
+    st.session_state["text"] = text_val
+
+    if not title_val or not text_val:
+        st.error("Пожалуйста, заполните оба поля в боковом меню!")
     else:
-        # 1. Поиск (RAG)
-        query = f"{title} {description}"
-        with st.status("🔍 Поиск успешных референсов в базе...", expanded=True) as status:
-            champions = retriever.search(query, limit=3)
-            status.update(label="✅ Референсы найдены!", state="complete", expanded=False)
+        with st.spinner("🧠 Нейросеть анализирует рынок и переписывает текст..."):
+            try:
+                payload = {
+                    "vacancies": [{"input_id": "demo", "title": title_val, "text": text_val}]
+                }
+                response = requests.post(f"{API_URL}/rewrite-batch", json=payload, timeout=120)
 
-        # 2. Показываем найденные вакансии
-        st.subheader("📊 Рыночный Benchmark (Топ-3 похожих)")
-        cols = st.columns(3)
-        for i, (col, vac) in enumerate(zip(cols, champions)):
-            with col:
-                st.success(f"Score: {vac['score']:.2f}")
-                st.write(f"**{vac['title']}**")
-                st.caption(f"Velocity: {vac['velocity']:.1f} откл/день")
+                if response.status_code == 200:
+                    data = response.json()
 
-        # 3. Генерация совета (LLM)
-        st.subheader("🤖 AI Рекомендации")
-        with st.spinner("Нейросеть пишет анализ (подождите 10-30 сек)..."):
-            start_time = time.time()
-            analysis = advisor.analyze(query, champions)
-            duration = time.time() - start_time
+                    # ПРОВЕРКА НА ПУСТОЙ ОТВЕТ (Защита от ошибки index out of range)
+                    if not data.get("results"):
+                        st.error("⚠️ Сервер вернул пустой результат.")
+                        st.info("Это значит, что внутри API произошла ошибка. Проверьте терминал сервера.")
+                    else:
+                        res = data["results"][0]
 
-        # Вывод результата
-        st.markdown(analysis['ai_advice_text'])
-        st.caption(f"Время генерации: {duration:.1f} сек на CPU")
+                        # Метрики
+                        score = res['quality_score']
+                        color = "green" if score > 80 else "orange" if score > 50 else "red"
+
+                        col_m1, col_m2, col_m3 = st.columns(3)
+                        with col_m2:
+                            st.markdown(f"""
+                            <div class="metric-card">
+                                <h3>Quality Score</h3>
+                                <h1 style="color: {color};">{score}/100</h1>
+                            </div>
+                            """, unsafe_allow_html=True)
+
+                        st.divider()
+
+                        col_left, col_right = st.columns(2)
+
+                        with col_left:
+                            st.subheader("🔍 Анализ проблем")
+                            if res["issues"]:
+                                for issue in res["issues"]:
+                                    st.warning(f"❌ {issue}")
+                            else:
+                                st.success("Критических проблем не найдено!")
+
+                            st.subheader("💡 Что улучшено")
+                            for note in res["rewrite_notes"]:
+                                st.info(f"✅ {note}")
+
+                        with col_right:
+                            st.subheader("✨ Готовый текст")
+                            st.text_area("Скопируйте результат:", value=res["rewritten_text"], height=600)
+
+                            st.download_button(
+                                label="📥 Скачать (.txt)",
+                                data=res["rewritten_text"],
+                                file_name="vacancy_optimized.txt",
+                                mime="text/plain"
+                            )
+
+                        with st.expander("🔧 Технические детали"):
+                            st.json(res.get("debug", {}))
+
+                else:
+                    st.error(f"Ошибка сервера: {response.status_code}")
+                    st.code(response.text)
+
+            except Exception as e:
+                st.error(f"Ошибка соединения с API: {e}")
+
+else:
+    if not st.session_state["title"]:
+        st.info("👈 Нажмите на пример слева или введите свой текст.")
