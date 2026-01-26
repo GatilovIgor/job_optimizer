@@ -68,3 +68,15 @@ class VacancyRetriever:
                 "score": float(score)
             })
         return sorted(results, key=lambda x: x['score'], reverse=True)
+
+    # НОВОЕ: Метод для получения топ-вакансии, если запрос пустой
+    def get_top_vacancy(self) -> Dict:
+        if self.vacancies:
+            vac = self.vacancies[0]  # Берем первую из топа
+            return {
+                "title": vac['vacancy_title'],
+                "html_text": vac['vacancy_description'],
+                "velocity": vac.get('velocity', 0),
+                "score": 1.0
+            }
+        return None
