@@ -1,23 +1,19 @@
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
-# --- Входные модели (Input) ---
-
 class VacancyIn(BaseModel):
     input_id: str = "default"
     title: str
     text: str
+    specialization: Optional[str] = None # Новое: для точности поиска
+    skills: Optional[List[str]] = None   # Новое: для точности поиска
 
 class RewriteRequest(BaseModel):
-    # API ожидает список вакансий (batch mode)
     vacancies: List[VacancyIn]
 
 class AnalyzeRequest(BaseModel):
-    # Старый формат запроса (для совместимости)
     title: str
     description: Optional[str] = None
-
-# --- Выходные модели (Output) ---
 
 class VacancyOut(BaseModel):
     input_id: str
@@ -30,5 +26,4 @@ class VacancyOut(BaseModel):
     debug: Optional[Dict[str, Any]] = None
 
 class RewriteResponse(BaseModel):
-    # Ответ содержит список обработанных результатов
     results: List[VacancyOut]

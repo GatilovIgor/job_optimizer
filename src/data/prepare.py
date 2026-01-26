@@ -1,11 +1,14 @@
 import pandas as pd
 import numpy as np
-import json
+import pathlib
 from html.parser import HTMLParser
-from datetime import datetime
+
+# Настройка путей
+ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
+DATA_DIR = ROOT_DIR / "dataset"
+DATA_DIR.mkdir(exist_ok=True)
 
 
-# --- Утилита для очистки HTML ---
 class MLStripper(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -21,71 +24,77 @@ class MLStripper(HTMLParser):
         return "".join(self.text)
 
 
-def strip_tags(html):
-    if not isinstance(html, str): return ""
+def strip_tags(html_txt):
+    if not isinstance(html_txt, str): return ""
     s = MLStripper()
-    s.feed(html)
+    s.feed(html_txt)
     return " ".join(s.get_data().split())
 
 
+def parse_pg_array(array_str):
+    """Парсит строку '{1,2,3}' в список [1, 2, 3]"""
+    if pd.isna(array_str) or str(array_str) == '{}': return []
+    content = str(array_str).strip('{}')
+    if not content: return []
+    return [int(x) for x in content.split(',') if x.strip().isdigit()]
+
+
 def prepare_dataset(input_csv: str, output_parquet: str):
-    print(f"📥 Loading {input_csv}...")
+    print(f"📥 Загрузка данных из {input_csv}...")
+
+    # 1. Загрузка основных данных
     df = pd.read_csv(input_csv)
 
-    # 1. Парсинг дат
-    # Используем last_update_date как "текущий момент" для снэпшота
-    now_date = pd.to_datetime(df['last_update_date']).max()
+    # 2. Загрузка справочника навыков (переводчик из ID в текст)
+    skills_map_path = ROOT_DIR / "skills.csv"
+    if skills_map_path.exists():
+        print("🔗 Загрузка справочника навыков skills.csv...")
+        df_skills = pd.read_csv(skills_map_path)
+        skill_map = dict(zip(df_skills['skill_id'], df_skills['name']))
+    else:
+        print("⚠️ ВНИМАНИЕ: skills.csv не найден! Навыки будут пустыми.")
+        skill_map = {}
+
+    # 3. Обработка дат и Velocity
+    df['upd_date'] = pd.to_datetime(df['last_update_date'])
     df['pub_date'] = pd.to_datetime(df['publication_date'])
 
-    # Считаем время жизни вакансии в днях (минимум 1 день, чтобы не делить на 0)
-    df['days_live'] = (now_date - df['pub_date']).dt.total_seconds() / (24 * 3600)
-    df['days_live'] = df['days_live'].apply(lambda x: max(x, 1))
+    # Считаем время жизни (минимум 0.5 дня, чтобы не делить на 0)
+    df['days_live'] = (df['upd_date'] - df['pub_date']).dt.total_seconds() / (24 * 3600)
+    df['days_live'] = df['days_live'].apply(lambda x: max(x, 0.5))
 
-    # 2. Расчет Velocity (Откликов в день)
-    # Заменяем total_responses NaN на 0
+    # Velocity: сколько откликов в день
     df['total_responses'] = df['total_responses'].fillna(0)
     df['velocity'] = df['total_responses'] / df['days_live']
 
-    # 3. Определение Top Performer (Успешная вакансия)
-    # Логика: Вакансия успешна, если её скорость выше средней по этому профилю
-    # Считаем Z-score для скорости внутри каждого Profile
+    # 4. Определение Top Performers (Успешные)
+    # Если данных мало (например, выгрузка за 2 дня), мы снижаем планку
+    # Вакансия считается успешной, если у неё > 0.1 отклика в день
+    df['is_top_performer'] = df['velocity'] > 0.1
 
-    # Сначала сгруппируем и посчитаем статистики
-    profile_stats = df.groupby('profile')['velocity'].agg(['mean', 'std']).reset_index()
-    df = df.merge(profile_stats, on='profile', suffixes=('', '_stats'))
+    # Если все равно 0 успешных, берем просто топ 10% самых активных
+    if df['is_top_performer'].sum() == 0:
+        threshold = df['velocity'].quantile(0.9)
+        df['is_top_performer'] = df['velocity'] >= threshold
 
-    # Если std = 0 (одна вакансия в профиле), z_score = 0
-    df['velocity_z'] = (df['velocity'] - df['mean']) / df['std'].replace(0, 1)
+    print(f"🏆 Найдено эталонных вакансий: {df['is_top_performer'].sum()} из {len(df)}")
 
-    # Условие успеха: Топ 30% (Z-score > 0.5) ИЛИ просто много откликов (> 1 в день)
-    # Фильтруем совсем новые вакансии (< 3 дней), чтобы не вносить шум
-    df['is_top_performer'] = (
-            ((df['velocity_z'] > 0.5) | (df['velocity'] > 1.0)) &
-            (df['days_live'] >= 3)
-    )
-
-    print(f"🏆 Identified {df['is_top_performer'].sum()} top performers out of {len(df)} vacancies.")
-
-    # 4. Обработка текста
-    print("🧹 Cleaning text...")
+    # 5. Обработка текстов и навыков
+    print("🧹 Очистка текста и маппинг навыков...")
     df['text_clean'] = df['vacancy_description'].apply(strip_tags)
 
-    # Обработка навыков (JSON -> String)
-    def clean_skills(x):
-        try:
-            return " ".join(json.loads(x))
-        except:
-            return ""
+    # Превращаем ID {1,2} в текст "Навык1, Навык2"
+    def map_skills(val):
+        ids = parse_pg_array(val)
+        return ", ".join([skill_map.get(i, "") for i in ids if i in skill_map])
 
-    df['skills_str'] = df['skills'].apply(clean_skills)
+    # В CSV колонка называется skill_ids (из вашего SQL)
+    if 'skill_ids' in df.columns:
+        df['skills_str'] = df['skill_ids'].apply(map_skills)
+    else:
+        df['skills_str'] = ""
 
-    # 5. Отбор колонок для RAG
-    # Нам нужны:
-    # - vacancy_title, skills_str, specialization, text_clean (для поиска)
-    # - vacancy_description (RAW HTML для LLM, чтобы она училась форматированию)
-    # - velocity (для сортировки)
-    # - is_top_performer (для фильтра)
-
+    # 6. Сохранение
     final_cols = [
         'vacancy_title',
         'vacancy_description',
@@ -97,11 +106,9 @@ def prepare_dataset(input_csv: str, output_parquet: str):
         'is_top_performer'
     ]
 
-    # Сохраняем
     df[final_cols].to_parquet(output_parquet, index=False)
-    print(f"✅ Saved processed dataset to {output_parquet}")
+    print(f"✅ Готовый датасет сохранен: {output_parquet}")
 
 
 if __name__ == "__main__":
-    # Запуск: python src/data/prepare.py
     prepare_dataset('vacancies_export.csv', 'dataset/vacancies_processed.parquet')

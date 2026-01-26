@@ -4,150 +4,101 @@ import os
 import html
 
 # --- КОНФИГУРАЦИЯ ---
-st.set_page_config(
-    page_title="Job Optimizer AI",
-    page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Job Optimizer AI", page_icon="🚀", layout="wide")
 
-# Стили
+# Стили с исправленной видимостью
 st.markdown("""
 <style>
-    .main-header { font-size: 2.5rem; font-weight: 700; color: #FF4B4B; text-align: center; margin-bottom: 20px; }
-    .sub-header { font-size: 1.2rem; color: #555; text-align: center; margin-bottom: 30px; }
-    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; text-align: center; }
+    .main-header { font-size: 2.5rem; font-weight: 700; color: #FF4B4B; text-align: center; margin-bottom: 5px; }
+    .sub-header { font-size: 1.1rem; color: #ccc; text-align: center; margin-bottom: 30px; }
+    .metric-card { 
+        background-color: #ffffff; 
+        padding: 20px; 
+        border-radius: 15px; 
+        text-align: center; 
+        border: 2px solid #FF4B4B;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .metric-card h3 { color: #333333 !important; margin-bottom: 0; }
+    .result-box {
+        background: white; 
+        color: black; 
+        padding: 25px; 
+        border-radius: 10px; 
+        border: 1px solid #ddd;
+        font-family: sans-serif;
+        line-height: 1.6;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-# --- Инициализация памяти ---
-if "title" not in st.session_state:
-    st.session_state["title"] = ""
-if "text" not in st.session_state:
-    st.session_state["text"] = ""
+if "title" not in st.session_state: st.session_state["title"] = ""
+if "text" not in st.session_state: st.session_state["text"] = ""
 
-# --- Хедер ---
 st.markdown('<div class="main-header">🚀 Job Optimizer AI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Превратите обычное описание вакансии в магнит для талантов</div>',
+st.markdown('<div class="sub-header">Мгновенное превращение текста вакансии в профессиональный оффер</div>',
             unsafe_allow_html=True)
 
-# --- БОКОВАЯ ПАНЕЛЬ ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("📝 Ввод данных")
-    st.caption("Быстрый старт:")
-    col_btn1, col_btn2 = st.columns(2)
-
-    if col_btn1.button("Пример: Python"):
-        st.session_state["title"] = "Middle Python Developer"
-        st.session_state["text"] = "Ищем питониста. Надо знать джанго, sql и докер. Зп по рынку. Работа в офисе."
-        st.rerun()
-
-    if col_btn2.button("Пример: Sales"):
-        st.session_state["title"] = "Менеджер по продажам"
-        st.session_state["text"] = "Нужен продажник. Холодные звонки, встречи. Опыт от 1 года. Оклад + %."
-        st.rerun()
-
     with st.form("input_form"):
-        title_val = st.text_input("Название должности", value=st.session_state["title"],
-                                  placeholder="Например: Product Manager")
-        text_val = st.text_area("Текст вакансии", value=st.session_state["text"], height=300,
-                                placeholder="Вставьте описание...")
+        title_val = st.text_input("Название должности", value=st.session_state["title"])
+        text_val = st.text_area("Текст вакансии", value=st.session_state["text"], height=350)
         submitted = st.form_submit_button("✨ Улучшить вакансию", type="primary")
 
 # --- ЛОГИКА ---
 if submitted:
-    st.session_state["title"] = title_val
-    st.session_state["text"] = text_val
-
     if not title_val or not text_val:
-        st.error("Пожалуйста, заполните оба поля в боковом меню!")
+        st.error("Заполните поля!")
     else:
-        with st.spinner("🧠 Нейросеть анализирует рынок и переписывает текст..."):
+        with st.spinner("🧠 Нейросеть анализирует рынок..."):
             try:
-                payload = {
-                    "vacancies": [{"input_id": "demo", "title": title_val, "text": text_val}]
-                }
-                response = requests.post(f"{API_URL}/rewrite-batch", json=payload, timeout=120)
+                payload = {"vacancies": [{"input_id": "demo", "title": title_val, "text": text_val}]}
+                response = requests.post(f"{API_URL}/rewrite-batch", json=payload, timeout=180)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    res = response.json()["results"][0]
 
-                    # ПРОВЕРКА НА ПУСТОЙ ОТВЕТ (Защита от ошибки index out of range)
-                    if not data.get("results"):
-                        st.error("⚠️ Сервер вернул пустой результат.")
-                        st.info("Это значит, что внутри API произошла ошибка. Проверьте терминал сервера.")
-                    else:
-                        res = data["results"][0]
+                    # Score UI
+                    score = res.get('quality_score', 0)
+                    color = "#28a745" if score > 80 else "#fd7e14" if score > 50 else "#dc3545"
 
-                        # Метрики
-                        score = res.get('quality_score', 0)
-                        color = "green" if score > 80 else "orange" if score > 50 else "red"
+                    col_m1, col_m2, col_m3 = st.columns([1, 2, 1])
+                    with col_m2:
+                        st.markdown(f"""
+                        <div class="metric-card">
+                            <h3>Оценка качества текста</h3>
+                            <h1 style="color: {color}; font-size: 4rem; margin: 0;">{score}/100</h1>
+                        </div>
+                        """, unsafe_allow_html=True)
 
-                        col_m1, col_m2, col_m3 = st.columns(3)
-                        with col_m2:
-                            st.markdown(f"""
-                            <div class="metric-card">
-                                <h3>Quality Score</h3>
-                                <h1 style="color: {color};">{score}/100</h1>
-                            </div>
-                            """, unsafe_allow_html=True)
+                    st.divider()
 
-                        st.divider()
+                    col_left, col_right = st.columns(2)
 
-                        col_left, col_right = st.columns(2)
+                    with col_left:
+                        st.subheader("🔍 Анализ и улучшения")
+                        # Ошибки
+                        if res.get("issues"):
+                            for issue in res["issues"]:
+                                st.warning(f"⚠️ {issue}")
+                        # Что сделано (теперь на русском)
+                        if res.get("rewrite_notes"):
+                            for note in res["rewrite_notes"]:
+                                st.info(f"✅ {note}")
 
-                        with col_left:
-                            st.subheader("🔍 Анализ проблем")
-                            if res.get("issues"):
-                                for issue in res["issues"]:
-                                    st.warning(f"❌ {issue}")
-                            else:
-                                st.success("Критических проблем не найдено!")
+                    with col_right:
+                        st.subheader("✨ Готовый текст")
+                        # Декодируем и рендерим
+                        raw_html = html.unescape(res["rewritten_text"])
+                        st.markdown(f'<div class="result-box">{raw_html}</div>', unsafe_allow_html=True)
 
-                            st.subheader("💡 Что улучшено")
-                            if res.get("rewrite_notes"):
-                                for note in res["rewrite_notes"]:
-                                    st.info(f"✅ {note}")
-
-                        with col_right:
-                            st.subheader("✨ Готовый текст")
-
-                            # --- ИСПРАВЛЕНИЕ: Декодирование HTML ---
-                            # Превращаем &lt;li&gt; обратно в <li>
-                            raw_html_content = html.unescape(res["rewritten_text"])
-
-                            # 1. Рендерим красивый вид (как на сайте)
-                            st.markdown(
-                                f"<div style='background:white; color:black; padding:20px; border-radius:10px; border:1px solid #ddd;'>{raw_html_content}</div>",
-                                unsafe_allow_html=True
-                            )
-
-                            st.divider()
-
-                            # 2. Показываем исходный код для копирования
-                            with st.expander("Показать HTML код для вставки"):
-                                st.code(raw_html_content, language="html")
-
-                            st.download_button(
-                                label="📥 Скачать (.html)",
-                                data=raw_html_content,
-                                file_name="vacancy_optimized.html",
-                                mime="text/html"
-                            )
-
-                        with st.expander("🔧 Технические детали"):
-                            st.json(res.get("debug", {}))
+                        st.download_button("📥 Скачать HTML", data=raw_html, file_name="vacancy.html", mime="text/html")
 
                 else:
-                    st.error(f"Ошибка сервера: {response.status_code}")
-                    st.code(response.text)
-
+                    st.error("Ошибка API")
             except Exception as e:
-                st.error(f"Ошибка соединения с API: {e}")
-                st.info("Убедитесь, что сервер запущен: python -m src.api.main")
-
-else:
-    if not st.session_state["title"]:
-        st.info("👈 Нажмите на пример слева или введите свой текст.")
+                st.error(f"Ошибка: {e}")

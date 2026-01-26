@@ -9,5 +9,6 @@ pyarrow
 sentence-transformers
 torch
 huggingface-hub
-llama-cpp-python
 pydantic
+hf_transfer
+hf_xet
