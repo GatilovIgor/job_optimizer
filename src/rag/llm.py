@@ -6,7 +6,7 @@ from llama_cpp import Llama
 from transformers import logging as transformers_logging
 
 transformers_logging.set_verbosity_error()
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+os.environ["HF_XET_HIGH_PERFORMANCE"] = "0"
 
 
 class LocalLLM:
