@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import sys
 from huggingface_hub import hf_hub_download
 from llama_cpp import Llama
 from transformers import logging as transformers_logging
@@ -18,89 +17,83 @@ class LocalLLM:
 
         print(f"📦 Loading model: {filename}...", flush=True)
         model_path = hf_hub_download(repo_id=repo_id, filename=filename)
-        # Убрали n_threads=8, пусть Llama сама решит или использует по умолчанию (обычно стабильнее)
         self.llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_gpu_layers=0,
             verbose=False
         )
-        print("📦 Model loaded successfully!", flush=True)
+        print("📦 Model ready!", flush=True)
 
     def generate_rewrite(self, user_vacancy: dict, references: list, issues: list) -> dict:
-        print("      [LLM] Preparing prompt...", flush=True)
-        ref_text = f"STYLE SAMPLE:\n{references[0]['html_text'][:600]}" if references else ""
-        issues_list = ", ".join(issues) if issues else "None"
+        print("      [LLM] Generating...", flush=True)
 
+        # Контекст из базы знаний (RAG)
+        ref_text = ""
+        if references:
+            ref_text = f"REFERENCE EXAMPLE (Use this style):\n{references[0]['html_text'][:800]}\nTitle: {references[0]['title']}"
+
+        issues_list = ", ".join(issues)
+
+        # Входные данные (что заполнил юзер)
         title = user_vacancy.get('title', '')
         text = user_vacancy.get('text', '')
         spec = user_vacancy.get('specialization', '')
 
-        input_info = []
-        if title: input_info.append(f"CURRENT TITLE: {title}")
-        if spec: input_info.append(f"CURRENT SPHERE: {spec}")
-        if text:
-            input_info.append(f"CURRENT TEXT: {text}")
-        else:
-            input_info.append("CURRENT TEXT: (Missing, generate based on Title/Sphere)")
-
-        input_block = "\n".join(input_info)
-
+        # Формируем задачу для LLM
         system_prompt = (
-            "You are an expert HR copywriter. Structure and rewrite the vacancy.\n"
-            "1. Define Title (Russian).\n"
-            "2. Define Sphere (Russian).\n"
-            "3. Rewrite Text (Russian, HTML).\n"
-            "Output JSON."
+            "You are an expert HR Recruiter. Your goal is to create a PERFECT vacancy description in Russian.\n"
+            "Rules:\n"
+            "1. If Title is missing -> Extract it from text OR invent a suitable one.\n"
+            "2. If Sphere is missing -> Infer it from title/text.\n"
+            "3. If Text is missing -> WRITE IT FROM SCRATCH based on Title.\n"
+            "4. If Text exists -> Rewrite it to be structured (HTML), attractive, and detailed.\n"
+            "5. Output valid JSON only."
         )
 
         user_message = (
             f"{ref_text}\n\n"
-            f"{input_block}\n"
-            f"ISSUES: {issues_list}\n\n"
-            "TASK: Create a perfect vacancy.\n"
-            "RETURN JSON:\n"
+            f"USER INPUT:\n"
+            f"Title: {title if title else '(MISSING - Create one!)'}\n"
+            f"Sphere: {spec if spec else '(MISSING - Infer it!)'}\n"
+            f"Text: {text if text else '(MISSING - Write a full vacancy description!)'}\n\n"
+            f"Fix these issues: {issues_list}\n\n"
+            "RESPONSE FORMAT (JSON):\n"
             "{\n"
-            "  \"title\": \"...\",\n"
-            "  \"specialization\": \"...\",\n"
-            "  \"rewritten_text\": \"...\",\n"
-            "  \"rewrite_notes\": [\"...\"]\n"
+            "  \"title\": \"Полное название должности\",\n"
+            "  \"specialization\": \"Сфера (Продажи, IT...)\",\n"
+            "  \"rewritten_text\": \"<p>Описание компании...</p><h3>Обязанности:</h3><ul><li>...</li></ul>...\",\n"
+            "  \"rewrite_notes\": [\"Придумал заголовок\", \"Добавил структуру\"]\n"
             "}"
         )
 
-        print("      [LLM] Generating tokens... (Check your CPU usage)", flush=True)
         try:
-            # Уменьшил токены до 1000 для скорости теста
             response = self.llm.create_chat_completion(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
-                temperature=0.2,
-                max_tokens=1000,
+                temperature=0.3,
+                max_tokens=1500,
                 response_format={"type": "json_object"}
             )
-            print("      [LLM] Generation complete!", flush=True)
-        except Exception as e:
-            print(f"      ❌ [LLM] CRASH during generation: {e}", flush=True)
-            return {}
 
-        content = response['choices'][0]['message']['content']
-
-        try:
+            content = response['choices'][0]['message']['content']
             clean_json = re.sub(r"```json|```", "", content).strip()
             data = json.loads(clean_json)
+
+            # Фоллбэки, если модель что-то забыла вернуть
             return {
-                "title": data.get("title", title),
-                "specialization": data.get("specialization", spec),
-                "rewritten_text": data.get("rewritten_text", ""),
+                "title": data.get("title", title or "Специалист"),
+                "specialization": data.get("specialization", spec or "Общее"),
+                "rewritten_text": data.get("rewritten_text", text),
                 "rewrite_notes": data.get("rewrite_notes", [])
             }
-        except json.JSONDecodeError:
-            print(f"      ⚠️ [LLM] JSON Error. Raw: {content[:100]}...", flush=True)
+
+        except Exception as e:
+            print(f"      ❌ LLM Error: {e}", flush=True)
             return {
-                "title": title,
-                "specialization": spec,
-                "rewritten_text": content,  # Возвращаем хотя бы текст
-                "rewrite_notes": ["JSON Error"]
+                "title": title, "specialization": spec,
+                "rewritten_text": text if text else "<p>Ошибка генерации</p>",
+                "rewrite_notes": ["Ошибка AI"]
             }
