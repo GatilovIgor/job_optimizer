@@ -1,55 +1,67 @@
 # =====================
-# Python
+# Python / General
 # =====================
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
+*$py.class
+*.so
 .Python
 
-# Virtual environment
+# =====================
+# Virtual Environment
+# =====================
 .venv/
 venv/
+env/
+
+# =====================
+# PyCharm (IDE Settings)
+# =====================
+.idea/
+*.iml
+*.iws
+*.ipr
 
 # =====================
 # Environment / Secrets
 # =====================
 .env
+.env.local
 .env.*
 !.env.example
 
 # =====================
-# Data (raw & generated)
+# Data & Logs
 # =====================
-dataset/
+# Игнорируем все файлы внутри папки data, кроме самой папки и нужных справочников
+data/*
+!data/.gitkeep
+
+# Если skills.csv — это постоянный справочник для работы, раскомментируйте строку ниже, чтобы добавить его в git:
+#!data/skills.csv
+
+# Игнорируем любые тяжелые файлы данных по всему проекту
 *.csv
 *.parquet
 *.json
 *.sql
+*.log
+*.sqlite
+*.db
 
 # =====================
-# AI / Models (ВАЖНО!)
+# AI Models / Cache
 # =====================
 models/
+qdrant_storage/
 *.gguf
 *.bin
-*.safetensors
 *.pth
-qdrant_storage/
+*.safetensors
 
 # =====================
-# PyCharm
-# =====================
-.idea/
-*.iml
-
-# =====================
-# OS
+# OS Generated Files
 # =====================
 .DS_Store
 Thumbs.db
-
-# =====================
-# Logs
-# =====================
-*.log
+Desktop.ini

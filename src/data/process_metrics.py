@@ -37,8 +37,8 @@ def main():
     print("🧠 Processing Data for ML (using common.text)...")
     root = get_project_root()
 
-    input_file = root / "dataset" / "vacancies_full.parquet"
-    output_file = root / "dataset" / "vacancies_processed.parquet"
+    input_file = root / "data" / "vacancies_full.parquet"
+    output_file = root / "data" / "vacancies_processed.parquet"
 
     if not input_file.exists():
         print(f"❌ Input not found: {input_file}")

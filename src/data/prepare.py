@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 
 # Настройка путей
 ROOT_DIR = pathlib.Path(__file__).resolve().parent.parent.parent
-DATA_DIR = ROOT_DIR / "dataset"
+DATA_DIR = ROOT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 
@@ -98,4 +98,18 @@ def prepare_dataset(input_csv: str, output_parquet: str):
 
 
 if __name__ == "__main__":
-    prepare_dataset('vacancies_export.csv', 'dataset/vacancies_processed.parquet')
+    import os
+
+    # Определяем путь к корню проекта (поднимаемся на 2 уровня вверх от src/data/prepare.py)
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # Формируем правильные пути к файлам в папке data
+    input_csv = os.path.join(BASE_DIR, 'data', 'vacancies_export.csv')
+    output_parquet = os.path.join(BASE_DIR, 'data', 'vacancies_processed.parquet')
+
+    # Проверяем, существует ли входной файл
+    if not os.path.exists(input_csv):
+        print(f"❌ Ошибка: Файл не найден по пути: {input_csv}")
+    else:
+        # Запускаем обработку с правильными путями
+        prepare_dataset(input_csv, output_parquet)

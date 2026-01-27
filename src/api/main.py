@@ -19,7 +19,7 @@ advisor = None
 async def lifespan(app: FastAPI):
     global retriever, advisor
     print("🚀 Starting AI Engine...")
-    data_path = root_dir / "dataset" / "vacancies_processed.parquet"
+    data_path = root_dir / "data" / "vacancies_processed.parquet"
 
     try:
         retriever = VacancyRetriever(data_path=str(data_path) if data_path.exists() else None)

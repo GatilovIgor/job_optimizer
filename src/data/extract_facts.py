@@ -128,7 +128,7 @@ def main():
     root = get_project_root()
     load_dotenv(root / ".env")
 
-    out_dir = root / "dataset"
+    out_dir = root / "data"
     out_dir.mkdir(exist_ok=True)
     out_file = out_dir / "facts.parquet"
 

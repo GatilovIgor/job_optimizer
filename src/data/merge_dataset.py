@@ -8,7 +8,7 @@ def main():
 
     # 1. Пути
     root = pathlib.Path(__file__).resolve().parent.parent.parent
-    data_dir = root / "dataset"
+    data_dir = root / "data"
     facts_file = data_dir / "facts.parquet"
     desc_file = data_dir / "descriptions.parquet"
     out_file = data_dir / "vacancies_full.parquet"
