@@ -1,12 +1,10 @@
 import os
-import json
 import re
 from huggingface_hub import hf_hub_download
 
 try:
     from llama_cpp import Llama
 except ImportError:
-    print("⚠️ llama_cpp not installed. LLM will not work.")
     Llama = None
 
 from transformers import logging as transformers_logging
@@ -19,7 +17,7 @@ class LocalLLM:
     def __init__(self,
                  repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
                  filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
-                 n_ctx=4096):
+                 n_ctx=2048):
 
         if Llama is None:
             raise ImportError("Please install llama-cpp-python")
@@ -27,65 +25,58 @@ class LocalLLM:
         print(f"📦 checking model: {filename}...", flush=True)
         try:
             model_path = hf_hub_download(repo_id=repo_id, filename=filename)
-            print(f"   path: {model_path}")
 
             self.llm = Llama(
                 model_path=model_path,
                 n_ctx=n_ctx,
-                n_gpu_layers=0,  # Ставим 0 для CPU, увеличьте если есть GPU
+                n_gpu_layers=-1,
+                n_threads=6,
                 verbose=False
             )
-            print("📦 Model loaded successfully!", flush=True)
+            print("📦 Model loaded!", flush=True)
         except Exception as e:
             print(f"❌ Failed to load LLM: {e}")
             self.llm = None
 
     def generate_rewrite(self, user_vacancy: dict, references: list, issues: list) -> dict:
         if not self.llm:
-            return {
-                "title": user_vacancy.get('title'),
-                "rewritten_text": user_vacancy.get('text') + "\n<p>(LLM not loaded)</p>",
-                "rewrite_notes": ["LLM Error"]
-            }
+            return {"raw_response": "Ошибка: Модель не загружена"}
 
-        print("      [LLM] Generating...", flush=True)
+        print("      [LLM] Generating (Text Mode)...", flush=True)
 
-        # Контекст из базы знаний (RAG)
+        # Контекст
         ref_text = ""
         if references:
             ref_content = references[0].get('html_text', '')[:800]
-            ref_title = references[0].get('title', '')
-            ref_text = f"REFERENCE EXAMPLE (Best Practice):\nTitle: {ref_title}\n{ref_content}"
+            ref_text = f"ПРИМЕР (СТИЛЬ):\n{ref_content}..."
 
-        issues_list = ", ".join(issues)
-
-        title = user_vacancy.get('title', '')
+        issues_str = ", ".join(issues) if issues else "Улучши структуру и продающий стиль."
+        title = user_vacancy.get('title', 'Сотрудник')
         text = user_vacancy.get('text', '')
-        spec = user_vacancy.get('specialization', '')
 
+        if len(text) < 100:
+            text += "\n(Это черновик. Придумай полноценное описание с обязанностями, требованиями и условиями.)"
+
+        # ПРОМПТ БЕЗ JSON (Просим просто текст)
         system_prompt = (
-            "You are an expert HR Recruiter. Your goal is to create a PERFECT vacancy description in Russian.\n"
-            "Rules:\n"
-            "1. If Title is missing -> Create one.\n"
-            "2. If Text is missing -> Write full description.\n"
-            "3. Use HTML tags (<h3>, <ul>, <li>, <p>).\n"
-            "4. Output valid JSON only."
+            "Ты — опытный HR-редактор. Напиши ЛУЧШЕЕ описание вакансии на русском языке.\n"
+            "Формат ответа СТРОГО такой:\n"
+            "ЗАГОЛОВОК: [Название должности]\n"
+            "СФЕРА: [Сфера деятельности]\n"
+            "ОПИСАНИЕ:\n"
+            "[Вступление]\n"
+            "<h3>Обязанности:</h3>\n<ul><li>...</li></ul>\n"
+            "<h3>Требования:</h3>\n<ul><li>...</li></ul>\n"
+            "<h3>Условия:</h3>\n<ul><li>...</li></ul>"
         )
 
         user_message = (
             f"{ref_text}\n\n"
-            f"USER INPUT:\n"
-            f"Title: {title if title else '(MISSING)'}\n"
-            f"Sphere: {spec if spec else '(MISSING)'}\n"
-            f"Text: {text if text else '(MISSING)'}\n\n"
-            f"Fix issues: {issues_list}\n\n"
-            "RESPONSE FORMAT (JSON):\n"
-            "{\n"
-            "  \"title\": \"Str\",\n"
-            "  \"specialization\": \"Str\",\n"
-            "  \"rewritten_text\": \"HTML String\",\n"
-            "  \"rewrite_notes\": [\"Str\"]\n"
-            "}"
+            f"ЗАДАЧА: Исправь и дополни вакансию.\n"
+            f"Текущая должность: {title}\n"
+            f"Исходный текст: {text}\n"
+            f"Что исправить: {issues_str}\n\n"
+            "Начинай ответ сразу с поля 'ЗАГОЛОВОК:'."
         )
 
         try:
@@ -94,27 +85,13 @@ class LocalLLM:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
-                temperature=0.3,
-                max_tokens=2000,
-                response_format={"type": "json_object"}
+                temperature=0.6,  # Больше креатива
+                max_tokens=1600,
             )
 
-            content = response['choices'][0]['message']['content']
-            # Чистка JSON от markdown
-            clean_json = re.sub(r"```json|```", "", content).strip()
-            data = json.loads(clean_json)
-
-            return {
-                "title": data.get("title", title or "Специалист"),
-                "specialization": data.get("specialization", spec or "Общее"),
-                "rewritten_text": data.get("rewritten_text", text),
-                "rewrite_notes": data.get("rewrite_notes", [])
-            }
+            raw_text = response['choices'][0]['message']['content']
+            return {"raw_response": raw_text}
 
         except Exception as e:
             print(f"      ❌ LLM Gen Error: {e}", flush=True)
-            return {
-                "title": title, "specialization": spec,
-                "rewritten_text": text if text else "<p>Ошибка генерации</p>",
-                "rewrite_notes": ["Ошибка AI"]
-            }
+            return {"raw_response": text}

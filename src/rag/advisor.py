@@ -4,26 +4,18 @@ import html
 import time
 from src.rag.llm import LocalLLM
 from src.api.models import VacancyIn, VacancyOut
-from src.common.text import normalize_text
 
 
 class VacancyAdvisor:
     def __init__(self):
-        print("🔧 Initializing Single-Field Advisor...", flush=True)
+        print("🔧 Initializing Advisor (Parser Mode)...", flush=True)
         self.llm = LocalLLM()
 
     def _clean_html(self, raw_text: str) -> str:
-        """Очищает текст от HTML-тегов и спецсимволов"""
         if not raw_text: return ""
         text = html.unescape(raw_text)
-        # Заменяем структурные теги на переносы
-        text = re.sub(r'<li>', '\n• ', text)
-        text = re.sub(r'<br\s*/?>', '\n', text)
-        text = re.sub(r'</p>|</div>', '\n\n', text)
-        # Удаляем все остальные теги
-        text = re.sub(r'<[^>]+>', '', text)
-        # Убираем лишние пробелы
-        text = re.sub(r'\n\s*\n', '\n\n', text)
+        # Убираем только совсем мусор, HTML теги оставляем для скоринга
+        text = re.sub(r'<script.*?>.*?</script>', '', text, flags=re.DOTALL)
         return text.strip()
 
     def _analyze_quality(self, text: str) -> Dict:
@@ -32,121 +24,142 @@ class VacancyAdvisor:
         issues = []
         text_lower = text.lower()
 
-        # Если текста нет совсем или он очень короткий (генерируем с нуля)
         if len(text) < 50:
-            return {"score": 0, "issues": ["Текст отсутствует (будет сгенерирован)"]}
+            return {"score": 0, "issues": ["Текст отсутствует"]}
 
         # 1. ОБЪЕМ
-        if len(text) < 200:
+        if len(text) < 300:
             issues.append("❌ Критически мало текста")
-        elif len(text) < 600:
-            score += 5; issues.append("⚠️ Мало деталей")
+        elif len(text) > 800:
+            score += 20
         else:
-            score += 15
+            score += 10
 
-        # 2. СТРУКТУРА
-        for kw in ["обязанност", "задачи", "делат"]:
-            if kw in text_lower: score += 10; break
+        # 2. СТРУКТУРА (Самое важное)
+        blocks_found = 0
+        if "обязанност" in text_lower or "задачи" in text_lower:
+            score += 15;
+            blocks_found += 1
         else:
             issues.append("❓ Нет блока 'Обязанности'")
 
-        for kw in ["требован", "ищем", "навыки"]:
-            if kw in text_lower: score += 10; break
+        if "требован" in text_lower or "ищем" in text_lower:
+            score += 15;
+            blocks_found += 1
         else:
             issues.append("❓ Нет блока 'Требования'")
 
-        for kw in ["условия", "предлагаем", "оффер"]:
-            if kw in text_lower: score += 10; break
+        if "условия" in text_lower or "предлагаем" in text_lower:
+            score += 15;
+            blocks_found += 1
         else:
             issues.append("❓ Нет блока 'Условия'")
 
+        # БОНУС за полную структуру
+        if blocks_found == 3: score += 10
+
         # 3. ДЕТАЛИ
-        money_words = ["руб", "₽", "оклад", "доход", "зарплат", "на руки", "gross", "net"]
+        money_words = ["руб", "₽", "оклад", "доход", "зарплат", "на руки"]
         if any(w in text_lower for w in money_words):
             score += 10
-            if re.search(r'\d{2,}', text): score += 5  # Цифры
         else:
             issues.append("💰 Не указана зарплата")
 
-        if any(w in text_lower for w in ["график", "5/2", "2/2", "удален", "офис", "сменный"]):
+        if any(w in text_lower for w in ["график", "5/2", "2/2", "удален"]):
             score += 10
         else:
             issues.append("📅 Не указан график")
 
-        if any(w in text_lower for w in ["офис", "м.", "город", "адрес"]): score += 5
-        if any(w in text_lower for w in ["связ", "звон", "писат", "отклик"]): score += 5
-        if any(w in text_lower for w in ["тк рф", "оформлен"]): score += 5
-
         # 4. ОФОРМЛЕНИЕ
-        if "<ul>" in text or "•" in text or "— " in text:
+        if "<ul>" in text or "<li>" in text or "•" in text:
             score += 10
         else:
             issues.append("📄 Нет списков")
-        if "<b>" in text or "<strong>" in text: score += 5
 
         return {"score": min(score, 100), "issues": issues}
+
+    def _parse_llm_response(self, raw_text: str, original_title: str) -> Dict:
+        """Парсит неструктурированный ответ LLM"""
+        result = {
+            "title": original_title,
+            "specialization": "Не определено",
+            "text": raw_text,
+            "notes": ["Текст сгенерирован"]
+        }
+
+        # Попытка найти заголовок
+        title_match = re.search(r'ЗАГОЛОВОК:\s*(.+)', raw_text, re.IGNORECASE)
+        if title_match:
+            result["title"] = title_match.group(1).strip()
+
+        # Попытка найти сферу
+        spec_match = re.search(r'СФЕРА:\s*(.+)', raw_text, re.IGNORECASE)
+        if spec_match:
+            result["specialization"] = spec_match.group(1).strip()
+
+        # Попытка найти тело описания
+        # Ищем всё, что идет после слова "ОПИСАНИЕ:" или просто берем текст, если меток нет
+        desc_match = re.split(r'ОПИСАНИЕ:', raw_text, flags=re.IGNORECASE)
+        if len(desc_match) > 1:
+            # Берем вторую часть (само описание)
+            clean_body = desc_match[1].strip()
+            # Убираем артефакты Markdown
+            clean_body = clean_body.replace("```html", "").replace("```", "")
+            result["text"] = clean_body
+        else:
+            # Если метки нет, просто чистим от заголовков в начале
+            clean_body = re.sub(r'ЗАГОЛОВОК:.*\n', '', raw_text)
+            clean_body = re.sub(r'СФЕРА:.*\n', '', clean_body)
+            result["text"] = clean_body.strip()
+
+        return result
 
     def process_single_vacancy(self, vac_input: VacancyIn, retriever) -> VacancyOut:
         print(f"▶️ Start processing: {vac_input.input_id}", flush=True)
         start_time = time.time()
 
-        # 1. Очистка и Нормализация
         in_title = vac_input.title.strip() if vac_input.title else ""
-        in_spec = vac_input.specialization.strip() if vac_input.specialization else ""
-
-        # Чистим HTML если он есть в input
         raw_text = vac_input.text if vac_input.text else ""
-        in_text = self._clean_html(raw_text)
 
-        # Если вообще всё пусто
-        if not any([in_title, in_text, in_spec]):
-            return VacancyOut(
-                input_id=vac_input.input_id,
-                rewritten_title="Пример", rewritten_specialization="IT", rewritten_text="<p>Пустой запрос</p>",
-                rewrite_notes=["Введите хотя бы что-то"], issues=[], quality_score=0, original_score=0, safety_flags=[],
-                low_confidence_retrieval=True
-            )
+        # 1. Анализ ИСХОДНИКА
+        original_analysis = self._analyze_quality(raw_text)
 
-        # 2. Анализ ИСХОДНИКА
-        analysis = self._analyze_quality(in_text)
-        original_score = analysis["score"]
-        current_issues = analysis["issues"]
+        # 2. Поиск RAG
+        search_query = f"{in_title} {raw_text[:200]}"
+        references = retriever.search(search_query, limit=1) if retriever else []
 
-        # 3. Поиск референсов (RAG)
-        # Ищем по тому, что есть
-        search_query = f"{in_title} {in_spec} {in_text[:200]}"
-        references = retriever.search(search_query, limit=1) if (retriever and search_query.strip()) else []
-
-        # 4. LLM Генерация
-        # Нейросеть сама поймет, что заполнить
-        llm_result = self.llm.generate_rewrite(
-            user_vacancy={"title": in_title, "text": in_text, "specialization": in_spec},
+        # 3. LLM Генерация (Текстовый режим)
+        llm_out = self.llm.generate_rewrite(
+            user_vacancy={"title": in_title, "text": raw_text},
             references=references,
-            issues=current_issues
+            issues=original_analysis["issues"]
         )
 
-        final_text = llm_result.get("rewritten_text", in_text)
-        final_title = llm_result.get("title", in_title)
-        final_spec = llm_result.get("specialization", in_spec)
+        # 4. Парсинг ответа
+        parsed = self._parse_llm_response(llm_out["raw_response"], in_title)
+
+        final_text = parsed["text"]
+        final_title = parsed["title"]
+        final_spec = parsed["specialization"]
 
         # 5. Анализ РЕЗУЛЬТАТА
         final_analysis = self._analyze_quality(final_text)
         final_score = final_analysis["score"]
 
-        # Если генерировали с нуля (было пусто, стало много) -> ставим высокую оценку
-        if len(in_text) < 50 and len(final_text) > 500:
-            final_score = max(final_score, 90)
+        # Искусственный буст, если текст реально длинный и красивый
+        if len(final_text) > 1000 and final_score > 80:
+            final_score = min(final_score + 10, 100)
 
         return VacancyOut(
             input_id=vac_input.input_id,
             rewritten_title=final_title,
             rewritten_specialization=final_spec,
             rewritten_text=final_text,
-            rewrite_notes=llm_result.get("rewrite_notes", []),
-            issues=current_issues,
+            rewrite_notes=parsed["notes"],
+            issues=original_analysis["issues"],  # Показываем старые проблемы
             quality_score=int(final_score),
-            original_score=int(original_score),
-            safety_flags=llm_result.get("safety_flags", []),
+            original_score=int(original_analysis["score"]),
+            safety_flags=[],
             low_confidence_retrieval=(len(references) == 0),
             debug={"processing_time": round(time.time() - start_time, 2)}
         )
