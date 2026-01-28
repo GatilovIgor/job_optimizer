@@ -35,16 +35,33 @@ def strip_tags(html_txt):
         s.feed(html_txt)
         return " ".join(s.get_data().split())
     except:
-        return html_txt
+        # В случае ошибки возвращаем исходный текст, чтобы не терять данные
+        return " ".join(str(html_txt).split())
 
 
-def parse_pg_array(array_str):
-    """Парсит массив из PostgreSQL вида {1,2,3} в список python."""
-    if pd.isna(array_str) or str(array_str) == '{}': return []
-    # Удаляем фигурные скобки и разбиваем
-    content = str(array_str).strip('{}')
+# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+def parse_array_str(array_str):
+    """
+    Универсальный парсер для массивов из строки вида '{1,2,3}' или '[1,2,3]'.
+    """
+    if pd.isna(array_str) or not isinstance(array_str, str): return []
+
+    # Убираем скобки (квадратные или фигурные) и лишние пробелы
+    content = array_str.strip('{}[] ')
+
     if not content: return []
-    return [int(x) for x in content.split(',') if x.strip().isdigit()]
+
+    # Разбиваем по запятой, убираем кавычки и берем только валидные цифры
+    # Это делает парсер устойчивым к разным форматам
+    ids = []
+    for item in content.split(','):
+        cleaned_item = item.strip().strip("'\"")
+        if cleaned_item.isdigit():
+            ids.append(int(cleaned_item))
+    return ids
+
+
+# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
 
 def clean_skill_name(raw_name):
@@ -148,7 +165,9 @@ def main():
     df['text_clean'] = df['vacancy_description'].apply(strip_tags)
 
     def map_ids_to_names(ids_str):
-        ids = parse_pg_array(ids_str)
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+        ids = parse_array_str(ids_str)
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
         # Берем имя из карты, если нет - пропускаем
         names = [skill_map.get(i) for i in ids if i in skill_map]
         return ", ".join([n for n in names if n])
@@ -156,10 +175,14 @@ def main():
     if 'skill_ids' in df.columns:
         df['skills_str'] = df['skill_ids'].apply(map_ids_to_names)
     else:
+        print("⚠️ Колонка 'skill_ids' не найдена. Навыки не будут обработаны.")
         df['skills_str'] = ""
 
     # 7. Сохранение
+    # Убедимся, что папка для сохранения существует
+    DATA_DIR.mkdir(exist_ok=True)
     output_file = DATA_DIR / "vacancies_processed.parquet"
+
     final_cols = [
         'vacancy_id', 'vacancy_title', 'vacancy_description',
         'text_clean', 'skills_str', 'specialization',
@@ -169,6 +192,11 @@ def main():
     # Оставляем только те колонки, которые реально есть в датафрейме
     cols_to_save = [c for c in final_cols if c in df.columns]
 
+    if not cols_to_save:
+        print("❌ Не найдено ни одной из целевых колонок для сохранения. Файл не будет создан.")
+        return
+
+    print(f"💾 Сохраняем колонки: {cols_to_save}")
     df[cols_to_save].to_parquet(output_file, index=False)
     print(f"✅ Готово! Файл сохранен: {output_file}")
 

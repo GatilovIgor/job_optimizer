@@ -35,3 +35,22 @@ job-optimizer-mvp/
 ├── Dockerfile
 ├── requirements.txt            # Зависимости
 └── README.md                   # Документация
+```
+
+
+# Локальный запуск 
+
+```bash
+python src/data/prepare.py
+```
+
+```bash
+python -m src.api.main
+```
+
+```bash
+streamlit run src/demo/app.py
+```
+
+
+...
