@@ -1,84 +1,123 @@
 import os
 import json
-from langchain_huggingface import HuggingFaceEndpoint
-from langchain.prompts import PromptTemplate
-from huggingface_hub import get_token
-from src.api.models import VacancyOut
+from huggingface_hub import InferenceClient, get_token
+from src.api.models import VacancyOut, VacancyIn
 
 
-class OptimizerLLM:
+class VacancyOptimizer:
     def __init__(self):
         token = os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
-        self.llm = HuggingFaceEndpoint(
-            repo_id="Qwen/Qwen2.5-72B-Instruct",
-            task="text-generation",
-            max_new_tokens=2000,
-            temperature=0.3,  # Пониже для стабильности JSON
-            huggingfacehub_api_token=token
+
+        if not token:
+            print("⚠️ HUGGINGFACE TOKEN НЕ НАЙДЕН. Убедитесь, что настроили .env или сделали hf login")
+
+        # Инициализируем клиент напрямую
+        # Qwen/Qwen2.5-72B-Instruct - это мощнейшая модель, она требует chat-интерфейса
+        self.client = InferenceClient(
+            model="Qwen/Qwen2.5-72B-Instruct",
+            token=token,
+            timeout=120
         )
 
-    def optimize(self, input_data: dict, references: list) -> VacancyOut:
-        # Формируем контекст из примеров
+    def optimize(self, vac: VacancyIn, references: list) -> VacancyOut:
+        # 1. Подготовка контекста (референсов)
         refs_text = ""
-        for i, ref in enumerate(references[:2]):
-            refs_text += f"\n--- ПРИМЕР ЭФФЕКТИВНОЙ ВАКАНСИИ {i + 1} ---\n"
-            refs_text += f"Title: {ref.get('vacancy_title')}\n"
-            refs_text += f"Description Snippet: {ref.get('vacancy_description')[:300]}...\n"
+        for i, r in enumerate(references[:2]):
+            title = r.get('vacancy_title', 'Без заголовка')
+            # Обрезаем описание, чтобы не забить контекст
+            desc = str(r.get('vacancy_description', '')).replace('\n', ' ')[:300]
+            refs_text += f"- Пример {i + 1}: {title} | {desc}...\n"
 
-        prompt = f"""
-        Ты — профессиональный HR-оптимизатор. Твоя задача — переписать вакансию так, чтобы максимизировать отклики, используя лучшие практики.
+        # 2. Формируем сообщения для чата (System + User)
+        system_message = """You are a professional HR Expert and Copywriter. 
+Your goal is to rewrite job descriptions to maximize applicant conversion.
+You MUST reply with valid JSON only. No markdown, no conversational filler."""
 
-        ИСХОДНЫЕ ДАННЫЕ:
-        Profile: {input_data.get('profile')}
-        City: {input_data.get('city')}
-        Title: {input_data.get('vacancy_title')}
-        Specialization: {input_data.get('specialization')}
-        Description: {input_data.get('vacancy_description')}
+        user_content = f"""
+I need you to optimize this vacancy based on successful examples.
 
-        РЕФЕРЕНСЫ (Успешные примеры):
-        {refs_text}
+INPUT DATA:
+Profile: {vac.profile}
+City: {vac.city}
+Title: {vac.vacancy_title}
+Specialization: {vac.specialization}
+Description: {vac.vacancy_description}
 
-        ЗАДАЧА:
-        1. Улучши заголовок (сделай продающим).
-        2. Структурируй описание (обязанности, требования, условия).
-        3. Сохрани город и профиль, если они корректны, или уточни их.
+SUCCESSFUL EXAMPLES (Use style and structure from here):
+{refs_text}
 
-        ВЕРНИ ОТВЕТ СТРОГО В JSON ФОРМАТЕ:
-        {{
-            "profile": "...",
-            "city": "...",
-            "vacancy_title": "...",
-            "specialization": "...",
-            "vacancy_description": "...",
-            "improvement_notes": ["что улучшено 1", "что улучшено 2"]
-        }}
-        """
+INSTRUCTIONS:
+1.  **Title**: Make it specific and attractive.
+2.  **Structure**: Organize Description into clear sections: "Обязанности" (Responsibilities), "Требования" (Requirements), "Условия" (Conditions).
+3.  **Tone**: Professional but inviting.
+4.  **Output**: Return strictly valid JSON.
+
+JSON SCHEMA:
+{{
+    "vacancy_title": "New Title",
+    "vacancy_description": "New formatted description...",
+    "profile": "Confirmed Profile",
+    "city": "Confirmed City",
+    "specialization": "Confirmed Specialization",
+    "improvement_notes": ["Note 1", "Note 2"]
+}}
+"""
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_content}
+        ]
 
         try:
-            response = self.llm.invoke(prompt)
-            # Чистим ответ от markdown ```json ... ```
-            clean_json = response.replace("```json", "").replace("```", "").strip()
+            # 3. Отправляем запрос как ЧАТ (chat_completion)
+            response = self.client.chat_completion(
+                messages=messages,
+                max_tokens=2500,
+                temperature=0.2,  # Низкая температура для строгости JSON
+                top_p=0.9
+            )
+
+            # Получаем текст ответа
+            raw_content = response.choices[0].message.content
+
+            # 4. Чистка JSON (Qwen любит оборачивать в ```json ... ```)
+            clean_json = raw_content.strip()
+
+            if "```json" in clean_json:
+                clean_json = clean_json.split("```json")[1].split("```")[0]
+            elif "```" in clean_json:
+                clean_json = clean_json.split("```")[1].split("```")[0]
+
+            # Убираем лишний текст до и после JSON
+            start_idx = clean_json.find("{")
+            end_idx = clean_json.rfind("}")
+            if start_idx != -1 and end_idx != -1:
+                clean_json = clean_json[start_idx: end_idx + 1]
+
+            # 5. Парсинг
             data = json.loads(clean_json)
 
             return VacancyOut(
-                input_id=input_data.get("input_id", "unknown"),
-                profile=data.get("profile", ""),
-                city=data.get("city", ""),
-                vacancy_title=data.get("vacancy_title", ""),
-                specialization=data.get("specialization", ""),
-                vacancy_description=data.get("vacancy_description", ""),
-                improvement_notes=data.get("improvement_notes", []),
-                efficiency_prediction=None  # Пока заглушка
+                input_id=vac.input_id,
+                profile=data.get("profile", vac.profile),
+                city=data.get("city", vac.city),
+                vacancy_title=data.get("vacancy_title", vac.vacancy_title),
+                specialization=data.get("specialization", vac.specialization),
+                vacancy_description=data.get("vacancy_description", vac.vacancy_description),
+                improvement_notes=data.get("improvement_notes", ["Оптимизация структуры и стиля"]),
+                predicted_efficiency_score=None
             )
+
         except Exception as e:
-            print(f"LLM Error: {e}")
-            # Возвращаем исходные данные в случае ошибки
+            print(f"❌ Ошибка Qwen API: {e}")
+            # Если сломалось - возвращаем исходник с ошибкой
             return VacancyOut(
-                input_id=input_data.get("input_id"),
-                profile=input_data.get("profile"),
-                city=input_data.get("city"),
-                vacancy_title=input_data.get("vacancy_title"),
-                specialization=input_data.get("specialization"),
-                vacancy_description=input_data.get("vacancy_description"),
-                improvement_notes=["Ошибка генерации, возвращен исходник"]
+                input_id=vac.input_id,
+                profile=vac.profile,
+                city=vac.city,
+                vacancy_title=vac.vacancy_title,
+                specialization=vac.specialization,
+                vacancy_description=vac.vacancy_description,
+                improvement_notes=[f"API Error: {str(e)}"],
+                predicted_efficiency_score=None
             )
