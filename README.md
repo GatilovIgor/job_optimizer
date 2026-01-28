@@ -39,6 +39,10 @@ poetry config virtualenvs.in-project true
 
 # Установка всех библиотек (версии зафиксированы в poetry.lock)
 poetry install
+
+# Для Windows (если появляется ошибка torch)
+poetry run pip uninstall -y torch torchvision torchaudio  
+poetry run pip install torch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1 --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ### 3. Настройка окружения (.env)
