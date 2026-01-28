@@ -1,89 +1,52 @@
-import sys
-import pathlib
 import uvicorn
-import os
+import pathlib
+import sys
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
 
-# Настройка путей для импорта модулей
-# Берем путь к файлу, поднимаемся на 3 уровня вверх до корня
+# При запуске через -m src.api.main Python сам добавит корень в path,
+# но на всякий случай явно укажем корень проекта
 root_dir = pathlib.Path(__file__).resolve().parent.parent.parent
-sys.path.append(str(root_dir))
+if str(root_dir) not in sys.path:
+    sys.path.append(str(root_dir))
 
+from src.api.models import RewriteRequest, RewriteResponse
 from src.rag.retriever import VacancyRetriever
-from src.rag.advisor import VacancyAdvisor
-from src.api.models import RewriteRequest, RewriteResponse, VacancyOut
+from src.rag.llm import VacancyOptimizer
 
 retriever = None
-advisor = None
+optimizer = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global retriever, advisor
-    print("🚀 Starting AI Engine...")
-
-    # Правильный путь к данным
+    global retriever, optimizer
     data_path = root_dir / "data" / "vacancies_processed.parquet"
 
-    if not data_path.exists():
-        print(f"⚠️ Warning: Dataset not found at {data_path}")
-        print("   Run 'python src/data/prepare.py' first!")
-
-    try:
-        # Инициализируем компоненты
-        # Передаем путь только если файл существует
-        retriever = VacancyRetriever(data_path=str(data_path) if data_path.exists() else None)
-        advisor = VacancyAdvisor()
-        print("✅ AI Ready!")
-    except Exception as e:
-        print(f"❌ Init Error: {e}")
-        # Не роняем приложение, чтобы оно могло запуститься хотя бы для healthcheck
+    print("🚀 Инициализация AI ядра...")
+    retriever = VacancyRetriever(str(data_path) if data_path.exists() else None)
+    optimizer = VacancyOptimizer()
     yield
-    print("🛑 AI Stopped.")
+    print("🛑 Остановка ядра.")
 
 
-app = FastAPI(lifespan=lifespan, title="Job Optimizer API")
+app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "Job Optimizer API is running"}
-
-
-@app.post("/rewrite-batch", response_model=RewriteResponse)
-async def rewrite_batch(req: RewriteRequest):
-    if not advisor:
-        raise HTTPException(status_code=503, detail="AI Engine is loading or failed to init.")
-
+@app.post("/optimize", response_model=RewriteResponse)
+async def optimize_endpoint(req: RewriteRequest):
     results = []
-    print(f"📥 Processing batch of {len(req.vacancies)} vacancies...")
-
     for vac in req.vacancies:
-        try:
-            # Основная логика
-            res = advisor.process_single_vacancy(vac, retriever)
-            results.append(res)
-        except Exception as e:
-            print(f"❌ Error processing vacancy {vac.input_id}: {e}")
-            # Возвращаем безопасную заглушку при ошибке
-            error_res = VacancyOut(
-                input_id=vac.input_id,
-                rewritten_title=vac.title or "Error",
-                rewritten_specialization=vac.specialization or "Unknown",
-                rewritten_text=f"Ошибка обработки: {str(e)}",
-                rewrite_notes=["Internal Server Error"],
-                issues=[],
-                quality_score=0,
-                original_score=0,
-                safety_flags=[],
-                low_confidence_retrieval=True
-            )
-            results.append(error_res)
+        # Поиск референсов
+        query = f"{vac.vacancy_title} {vac.specialization}"
+        refs = retriever.search(query) if retriever else []
 
+        # Генерация
+        res = optimizer.optimize(vac, refs)
+        results.append(res)
     return RewriteResponse(results=results)
 
 
 if __name__ == "__main__":
-    # Запуск сервера
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Настройки для локального запуска
+    uvicorn.run("src.api.main:app", host="0.0.0.0", port=8000, reload=True)

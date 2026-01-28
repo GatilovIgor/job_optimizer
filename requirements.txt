@@ -14,5 +14,8 @@ hf_transfer==0.1.9
 hf_xet==1.2.0
 pytest==9.0.2
 httpx==0.28.1
-transformers
+transformers==5.0.0
 llama-cpp-python==0.3.2
+langchain-huggingface==0.3.1
+langchain==0.3.27
+tqdm==4.67.1

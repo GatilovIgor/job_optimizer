@@ -1,96 +1,84 @@
 import os
-import pathlib
+import json
+from langchain_huggingface import HuggingFaceEndpoint
+from langchain.prompts import PromptTemplate
+from huggingface_hub import get_token
+from src.api.models import VacancyOut
 
-try:
-    from llama_cpp import Llama
-except ImportError:
-    Llama = None
 
-class LocalLLM:
-    def __init__(self, n_ctx=4096):
-        if Llama is None:
-            raise ImportError("Please install llama-cpp-python")
-
-        # 1. Находим путь к модели
-        # Поднимаемся от src/rag/llm.py до корня проекта
-        root_dir = pathlib.Path(__file__).resolve().parent.parent.parent
-        model_path = root_dir / "models" / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-
-        print(f"📦 Loading local model: {model_path}...", flush=True)
-
-        if not model_path.exists():
-            raise FileNotFoundError(f"❌ Model file not found at: {model_path}\nPlease put the .gguf file in the 'models' folder.")
-
-        try:
-            self.llm = Llama(
-                model_path=str(model_path), # Путь к вашему файлу
-                n_ctx=n_ctx,
-                n_gpu_layers=-1,
-                n_threads=6,
-                verbose=False
-            )
-            print("📦 Llama-3.2-3B Loaded!", flush=True)
-        except Exception as e:
-            print(f"❌ Failed to load LLM: {e}")
-            self.llm = None
-
-    def generate_rewrite(self, user_vacancy: dict, references: list, issues: list) -> dict:
-        if not self.llm:
-            return {"raw_response": "Ошибка: Модель не загружена"}
-
-        print("      [Llama] Generating...", flush=True)
-
-        title = user_vacancy.get('title', 'Сотрудник')
-        text = user_vacancy.get('text', '')
-
-        if len(text) < 100:
-            text += f"\n(Информация скупая. Придумай профессиональные обязанности и требования для роли '{title}')"
-
-        system_prompt = (
-            "You are a professional HR Specialist. Output MUST be in Russian.\n"
-            "Follow the structure exactly."
+class OptimizerLLM:
+    def __init__(self):
+        token = os.getenv("HUGGINGFACEHUB_API_TOKEN") or get_token()
+        self.llm = HuggingFaceEndpoint(
+            repo_id="Qwen/Qwen2.5-72B-Instruct",
+            task="text-generation",
+            max_new_tokens=2000,
+            temperature=0.3,  # Пониже для стабильности JSON
+            huggingfacehub_api_token=token
         )
 
-        user_message = (
-            f"Напиши подробную вакансию: {title}.\n"
-            f"Черновик: {text}\n\n"
-            "СТРУКТУРА ОТВЕТА:\n"
-            "ЗАГОЛОВОК: [Должность]\n"
-            "СФЕРА: [Сфера]\n"
-            "ОПИСАНИЕ:\n"
-            "<p>[Вступление]</p>\n"
-            "<h3>Обязанности:</h3>\n"
-            "<ul>\n"
-            "<li>[Пункт 1]</li>\n"
-            "<li>[Пункт 2]</li>\n"
-            "<li>[Пункт 3]</li>\n"
-            "<li>[Пункт 4]</li>\n"
-            "<li>[Пункт 5]</li>\n"
-            "</ul>\n"
-            "<h3>Требования:</h3>\n"
-            "<ul>\n"
-            "<li>[Пункт 1]</li>\n"
-            "<li>[Пункт 2]</li>\n"
-            "<li>[Пункт 3]</li>\n"
-            "</ul>\n"
-            "<h3>Условия:</h3>\n"
-            "<ul>\n"
-            "<li>[Зарплата]</li>\n"
-            "<li>[График]</li>\n"
-            "<li>[Офис/Бонусы]</li>\n"
-            "</ul>"
-        )
+    def optimize(self, input_data: dict, references: list) -> VacancyOut:
+        # Формируем контекст из примеров
+        refs_text = ""
+        for i, ref in enumerate(references[:2]):
+            refs_text += f"\n--- ПРИМЕР ЭФФЕКТИВНОЙ ВАКАНСИИ {i + 1} ---\n"
+            refs_text += f"Title: {ref.get('vacancy_title')}\n"
+            refs_text += f"Description Snippet: {ref.get('vacancy_description')[:300]}...\n"
+
+        prompt = f"""
+        Ты — профессиональный HR-оптимизатор. Твоя задача — переписать вакансию так, чтобы максимизировать отклики, используя лучшие практики.
+
+        ИСХОДНЫЕ ДАННЫЕ:
+        Profile: {input_data.get('profile')}
+        City: {input_data.get('city')}
+        Title: {input_data.get('vacancy_title')}
+        Specialization: {input_data.get('specialization')}
+        Description: {input_data.get('vacancy_description')}
+
+        РЕФЕРЕНСЫ (Успешные примеры):
+        {refs_text}
+
+        ЗАДАЧА:
+        1. Улучши заголовок (сделай продающим).
+        2. Структурируй описание (обязанности, требования, условия).
+        3. Сохрани город и профиль, если они корректны, или уточни их.
+
+        ВЕРНИ ОТВЕТ СТРОГО В JSON ФОРМАТЕ:
+        {{
+            "profile": "...",
+            "city": "...",
+            "vacancy_title": "...",
+            "specialization": "...",
+            "vacancy_description": "...",
+            "improvement_notes": ["что улучшено 1", "что улучшено 2"]
+        }}
+        """
 
         try:
-            response = self.llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_message}
-                ],
-                temperature=0.7,
-                max_tokens=2000,
+            response = self.llm.invoke(prompt)
+            # Чистим ответ от markdown ```json ... ```
+            clean_json = response.replace("```json", "").replace("```", "").strip()
+            data = json.loads(clean_json)
+
+            return VacancyOut(
+                input_id=input_data.get("input_id", "unknown"),
+                profile=data.get("profile", ""),
+                city=data.get("city", ""),
+                vacancy_title=data.get("vacancy_title", ""),
+                specialization=data.get("specialization", ""),
+                vacancy_description=data.get("vacancy_description", ""),
+                improvement_notes=data.get("improvement_notes", []),
+                efficiency_prediction=None  # Пока заглушка
             )
-            return {"raw_response": response['choices'][0]['message']['content']}
         except Exception as e:
-            print(f"      ❌ LLM Gen Error: {e}", flush=True)
-            return {"raw_response": text}
+            print(f"LLM Error: {e}")
+            # Возвращаем исходные данные в случае ошибки
+            return VacancyOut(
+                input_id=input_data.get("input_id"),
+                profile=input_data.get("profile"),
+                city=input_data.get("city"),
+                vacancy_title=input_data.get("vacancy_title"),
+                specialization=input_data.get("specialization"),
+                vacancy_description=input_data.get("vacancy_description"),
+                improvement_notes=["Ошибка генерации, возвращен исходник"]
+            )

@@ -1,204 +1,106 @@
 import pandas as pd
 import numpy as np
 import pathlib
-import re
-import os
-from html.parser import HTMLParser
 
-# --- КОНФИГУРАЦИЯ ПУТЕЙ ---
-# Скрипт лежит в src/data/, поднимаемся на 2 уровня вверх к корню проекта
+# --- НАСТРОЙКА ПУТЕЙ ---
+# Файл лежит в src/data/prepare.py
 CURRENT_DIR = pathlib.Path(__file__).resolve().parent
+# Поднимаемся на 2 уровня: src/data -> src -> root
 ROOT_DIR = CURRENT_DIR.parent.parent
 DATA_DIR = ROOT_DIR / "data"
 
-
-class MLStripper(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.reset()
-        self.strict = False
-        self.convert_charrefs = True
-        self.text = []
-
-    def handle_data(self, d):
-        self.text.append(d)
-
-    def get_data(self):
-        return "".join(self.text)
+# Путь к исходному CSV и итоговому Parquet
+RAW_FILE = DATA_DIR / "fact_vacancies_test.csv"
+OUTPUT_FILE = DATA_DIR / "vacancies_processed.parquet"
 
 
-def strip_tags(html_txt):
-    """Удаляет HTML теги из текста."""
-    if not isinstance(html_txt, str): return ""
-    try:
-        s = MLStripper()
-        s.feed(html_txt)
-        return " ".join(s.get_data().split())
-    except:
-        # В случае ошибки возвращаем исходный текст, чтобы не терять данные
-        return " ".join(str(html_txt).split())
-
-
-# --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-def parse_array_str(array_str):
+def calculate_peak_efficiency(group, window_days=7):
     """
-    Универсальный парсер для массивов из строки вида '{1,2,3}' или '[1,2,3]'.
+    Рассчитывает метрику: Максимальный прирост откликов за 7 дней.
     """
-    if pd.isna(array_str) or not isinstance(array_str, str): return []
+    group = group.sort_values('loaded_at')
+    dates = group['loaded_at'].values
+    responses = group['total_responses'].fillna(0).values
 
-    # Убираем скобки (квадратные или фигурные) и лишние пробелы
-    content = array_str.strip('{}[] ')
+    n = len(group)
+    if n < 2: return 0.0
 
-    if not content: return []
+    best_eff = 0.0
 
-    # Разбиваем по запятой, убираем кавычки и берем только валидные цифры
-    # Это делает парсер устойчивым к разным форматам
-    ids = []
-    for item in content.split(','):
-        cleaned_item = item.strip().strip("'\"")
-        if cleaned_item.isdigit():
-            ids.append(int(cleaned_item))
-    return ids
+    for i in range(n):
+        start_date = dates[i]
+        limit_date = start_date + np.timedelta64(window_days, 'D')
 
+        # Индекс конца окна
+        end_idx = np.searchsorted(dates, limit_date, side='right') - 1
 
-# --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+        if end_idx <= i: continue
 
+        val_end = responses[end_idx]
+        val_start = responses[i]
 
-def clean_skill_name(raw_name):
-    """Очищает название навыка от артефактов вида Keyskill': ['..."""
-    if pd.isna(raw_name): return ""
-    txt = str(raw_name)
-    # Убираем начало строки
-    txt = txt.replace("Keyskill': ['", "")
-    # Убираем возможные хвосты (если есть закрывающие скобки)
-    txt = txt.replace("']", "")
-    return txt.strip()
+        current_eff = 0
+        if val_start > 0:
+            current_eff = val_end - val_start
+        else:
+            # Если начало 0, ищем первый >0
+            window_slice = responses[i: end_idx + 1]
+            nonzero_indices = np.nonzero(window_slice)[0]
+            if len(nonzero_indices) > 0:
+                first_nonzero = window_slice[nonzero_indices[0]]
+                current_eff = val_end - first_nonzero
+            else:
+                current_eff = 0
 
+        if current_eff > best_eff:
+            best_eff = current_eff
 
-def load_skills(skills_path):
-    """Загружает и чистит справочник навыков."""
-    if not skills_path.exists():
-        print(f"⚠️ Файл навыков не найден: {skills_path}")
-        return {}
-
-    print(f"📖 Загрузка навыков из {skills_path.name}...")
-    df_skills = pd.read_csv(skills_path)
-
-    # Применяем очистку имен
-    df_skills['name_clean'] = df_skills['name'].apply(clean_skill_name)
-
-    # Создаем словарь id -> name
-    return dict(zip(df_skills['skill_id'], df_skills['name_clean']))
-
-
-def load_merged_data(data_dir):
-    """Ищет CSV файлы с данными (исключая skills.csv) и объединяет их."""
-    all_files = list(data_dir.glob("*.csv"))
-    # Исключаем skills.csv и файлы экспорта, если они есть, берем только чанки данных
-    data_files = [f for f in all_files if f.name != 'skills.csv' and 'vacancies_processed' not in f.name]
-
-    if not data_files:
-        print("❌ Не найдено файлов данных (CSV) в папке data!")
-        return pd.DataFrame()
-
-    print(f"📦 Найдено файлов данных: {len(data_files)} {[f.name for f in data_files]}")
-
-    dfs = []
-    for f in data_files:
-        print(f"   + Чтение {f.name}...")
-        try:
-            # low_memory=False помогает, если типы данных смешаны
-            df_chunk = pd.read_csv(f, low_memory=False)
-            dfs.append(df_chunk)
-        except Exception as e:
-            print(f"   ❌ Ошибка чтения {f.name}: {e}")
-
-    if not dfs:
-        return pd.DataFrame()
-
-    return pd.concat(dfs, ignore_index=True)
+    return float(best_eff)
 
 
 def main():
-    print("🚀 STEP: Data Preparation (Merged & Cleaned)...")
+    print(f"🚀 Рабочая директория: {ROOT_DIR}")
+    print(f"📂 Ищем файл данных: {RAW_FILE}")
 
-    # 1. Загрузка справочника навыков
-    skill_map = load_skills(DATA_DIR / "skills.csv")
-
-    # 2. Загрузка и объединение данных
-    df = load_merged_data(DATA_DIR)
-    if df.empty:
-        print("❌ Нет данных для обработки.")
+    if not RAW_FILE.exists():
+        print(f"❌ ОШИБКА: Файл не найден! Положите 'fact_vacancies_test.csv' в папку 'data/'.")
         return
 
-    print(f"   Всего строк загружено: {len(df)}")
+    df = pd.read_csv(RAW_FILE)
+    df['loaded_at'] = pd.to_datetime(df['loaded_at'])
 
-    # 3. Обработка дат
-    print("⏳ Расчет времени жизни вакансий...")
-    df['upd_date'] = pd.to_datetime(df['last_update_date'], errors='coerce')
-    df['pub_date'] = pd.to_datetime(df['publication_date'], errors='coerce')
+    print(f"📦 Загружено строк: {len(df)}")
 
-    # Считаем days_live (разница между обновлением и публикацией)
-    # Если даты совпадают или update пустой, ставим минимум 0.1 дня, чтобы не делить на ноль
-    df['days_live'] = (df['upd_date'] - df['pub_date']).dt.total_seconds() / (24 * 3600)
-    df['days_live'] = df['days_live'].fillna(0).apply(lambda x: max(x, 0.1))
+    # Расчет метрики
+    print("⏳ Расчет пиковой эффективности (может занять время)...")
+    best_vacancies = []
 
-    # 4. Расчет Velocity (отклики в день)
-    df['total_responses'] = df['total_responses'].fillna(0)
-    df['velocity'] = df['total_responses'] / df['days_live']
+    for vac_id, group in df.groupby('vacancy_id'):
+        eff = calculate_peak_efficiency(group)
+        # Берем последнюю версию описания
+        best_row = group.sort_values('loaded_at').iloc[-1].to_dict()
+        best_row['efficiency'] = eff
+        best_vacancies.append(best_row)
 
-    # 5. Определение Top Performers (Эталонов)
-    # Берем 80-й перцентиль по скорости набора откликов
-    velocity_threshold = df['velocity'].quantile(0.8)
+    result_df = pd.DataFrame(best_vacancies)
 
-    # Условие: Хорошая скорость И достаточно подробное описание (>300 символов)
-    # Обрабатываем описание на случай NaN
-    df['vacancy_description'] = df['vacancy_description'].fillna("")
+    # Топ перформеры (Top 20%)
+    threshold = result_df['efficiency'].quantile(0.8)
+    result_df['is_top_performer'] = result_df['efficiency'] >= threshold
 
-    df['is_top_performer'] = (df['velocity'] >= velocity_threshold) & (df['vacancy_description'].str.len() > 300)
+    print(f"📊 Порог (Top 20%): {threshold:.2f} откликов/неделю")
 
-    print(f"   🏆 Порог Velocity (top 20%): {velocity_threshold:.2f}")
-    print(f"   🌟 Найдено эталонных вакансий: {df['is_top_performer'].sum()}")
-
-    # 6. Очистка текста и маппинг навыков
-    print("🧹 Очистка HTML и маппинг навыков...")
-    df['text_clean'] = df['vacancy_description'].apply(strip_tags)
-
-    def map_ids_to_names(ids_str):
-        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-        ids = parse_array_str(ids_str)
-        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
-        # Берем имя из карты, если нет - пропускаем
-        names = [skill_map.get(i) for i in ids if i in skill_map]
-        return ", ".join([n for n in names if n])
-
-    if 'skill_ids' in df.columns:
-        df['skills_str'] = df['skill_ids'].apply(map_ids_to_names)
-    else:
-        print("⚠️ Колонка 'skill_ids' не найдена. Навыки не будут обработаны.")
-        df['skills_str'] = ""
-
-    # 7. Сохранение
-    # Убедимся, что папка для сохранения существует
-    DATA_DIR.mkdir(exist_ok=True)
-    output_file = DATA_DIR / "vacancies_processed.parquet"
-
-    final_cols = [
-        'vacancy_id', 'vacancy_title', 'vacancy_description',
-        'text_clean', 'skills_str', 'specialization',
-        'profile', 'velocity', 'is_top_performer'
+    # Сохранение
+    cols = [
+        'vacancy_id', 'profile', 'city', 'vacancy_title',
+        'vacancy_description', 'specialization',
+        'efficiency', 'is_top_performer'
     ]
+    # Оставляем только те, что есть в df
+    save_cols = [c for c in cols if c in result_df.columns]
 
-    # Оставляем только те колонки, которые реально есть в датафрейме
-    cols_to_save = [c for c in final_cols if c in df.columns]
-
-    if not cols_to_save:
-        print("❌ Не найдено ни одной из целевых колонок для сохранения. Файл не будет создан.")
-        return
-
-    print(f"💾 Сохраняем колонки: {cols_to_save}")
-    df[cols_to_save].to_parquet(output_file, index=False)
-    print(f"✅ Готово! Файл сохранен: {output_file}")
+    result_df[save_cols].to_parquet(OUTPUT_FILE, index=False)
+    print(f"✅ Готово! Файл сохранен: {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

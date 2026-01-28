@@ -7,10 +7,6 @@
 ```text
 job-optimizer-mvp/
 ├── data/                       # Данные
-│   ├── skills.csv              # Справочник навыков
-│   ├── 21-22.csv               # Исходные данные (CSV)
-│   ├── 22-24.csv
-│   ├── 24-27.csv
 │   └── vacancies_processed.parquet # Итоговый чистый датасет (генерируется скриптом)
 ├── src/                        # Исходный код
 │   ├── api/                    # Backend API (FastAPI)
@@ -22,6 +18,7 @@ job-optimizer-mvp/
 │   │   └── prepare.py          # Сборка и очистка датасета
 │   ├── demo/                   # Веб-демо (Streamlit)
 │   │   └── app.py
+        └── fact_vacancies_test.csv  
 │   └── rag/                    # Модуль рекомендаций (LLM + RAG)
 │       ├── advisor.py          # Логика советов
 │       ├── llm.py              # Работа с нейросетью
