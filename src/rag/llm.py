@@ -2,7 +2,13 @@ import os
 import json
 import re
 from huggingface_hub import hf_hub_download
-from llama_cpp import Llama
+
+try:
+    from llama_cpp import Llama
+except ImportError:
+    print("⚠️ llama_cpp not installed. LLM will not work.")
+    Llama = None
+
 from transformers import logging as transformers_logging
 
 transformers_logging.set_verbosity_error()
@@ -15,55 +21,70 @@ class LocalLLM:
                  filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
                  n_ctx=4096):
 
-        print(f"📦 Loading model: {filename}...", flush=True)
-        model_path = hf_hub_download(repo_id=repo_id, filename=filename)
-        self.llm = Llama(
-            model_path=model_path,
-            n_ctx=n_ctx,
-            n_gpu_layers=0,
-            verbose=False
-        )
-        print("📦 Model ready!", flush=True)
+        if Llama is None:
+            raise ImportError("Please install llama-cpp-python")
+
+        print(f"📦 checking model: {filename}...", flush=True)
+        try:
+            model_path = hf_hub_download(repo_id=repo_id, filename=filename)
+            print(f"   path: {model_path}")
+
+            self.llm = Llama(
+                model_path=model_path,
+                n_ctx=n_ctx,
+                n_gpu_layers=0,  # Ставим 0 для CPU, увеличьте если есть GPU
+                verbose=False
+            )
+            print("📦 Model loaded successfully!", flush=True)
+        except Exception as e:
+            print(f"❌ Failed to load LLM: {e}")
+            self.llm = None
 
     def generate_rewrite(self, user_vacancy: dict, references: list, issues: list) -> dict:
+        if not self.llm:
+            return {
+                "title": user_vacancy.get('title'),
+                "rewritten_text": user_vacancy.get('text') + "\n<p>(LLM not loaded)</p>",
+                "rewrite_notes": ["LLM Error"]
+            }
+
         print("      [LLM] Generating...", flush=True)
 
         # Контекст из базы знаний (RAG)
         ref_text = ""
         if references:
-            ref_text = f"REFERENCE EXAMPLE (Use this style):\n{references[0]['html_text'][:800]}\nTitle: {references[0]['title']}"
+            ref_content = references[0].get('html_text', '')[:800]
+            ref_title = references[0].get('title', '')
+            ref_text = f"REFERENCE EXAMPLE (Best Practice):\nTitle: {ref_title}\n{ref_content}"
 
         issues_list = ", ".join(issues)
 
-        # Входные данные (что заполнил юзер)
         title = user_vacancy.get('title', '')
         text = user_vacancy.get('text', '')
         spec = user_vacancy.get('specialization', '')
 
-        # Формируем задачу для LLM
         system_prompt = (
             "You are an expert HR Recruiter. Your goal is to create a PERFECT vacancy description in Russian.\n"
             "Rules:\n"
-            "1. If Title is missing -> Extract it from text OR invent a suitable one.\n"
-            "2. If Sphere is missing -> Infer it from title/text.\n"
-            "3. If Text is missing -> WRITE IT FROM SCRATCH based on Title.\n"
-            "4. If Text exists -> Rewrite it to be structured (HTML), attractive, and detailed.\n"
-            "5. Output valid JSON only."
+            "1. If Title is missing -> Create one.\n"
+            "2. If Text is missing -> Write full description.\n"
+            "3. Use HTML tags (<h3>, <ul>, <li>, <p>).\n"
+            "4. Output valid JSON only."
         )
 
         user_message = (
             f"{ref_text}\n\n"
             f"USER INPUT:\n"
-            f"Title: {title if title else '(MISSING - Create one!)'}\n"
-            f"Sphere: {spec if spec else '(MISSING - Infer it!)'}\n"
-            f"Text: {text if text else '(MISSING - Write a full vacancy description!)'}\n\n"
-            f"Fix these issues: {issues_list}\n\n"
+            f"Title: {title if title else '(MISSING)'}\n"
+            f"Sphere: {spec if spec else '(MISSING)'}\n"
+            f"Text: {text if text else '(MISSING)'}\n\n"
+            f"Fix issues: {issues_list}\n\n"
             "RESPONSE FORMAT (JSON):\n"
             "{\n"
-            "  \"title\": \"Полное название должности\",\n"
-            "  \"specialization\": \"Сфера (Продажи, IT...)\",\n"
-            "  \"rewritten_text\": \"<p>Описание компании...</p><h3>Обязанности:</h3><ul><li>...</li></ul>...\",\n"
-            "  \"rewrite_notes\": [\"Придумал заголовок\", \"Добавил структуру\"]\n"
+            "  \"title\": \"Str\",\n"
+            "  \"specialization\": \"Str\",\n"
+            "  \"rewritten_text\": \"HTML String\",\n"
+            "  \"rewrite_notes\": [\"Str\"]\n"
             "}"
         )
 
@@ -74,15 +95,15 @@ class LocalLLM:
                     {"role": "user", "content": user_message}
                 ],
                 temperature=0.3,
-                max_tokens=1500,
+                max_tokens=2000,
                 response_format={"type": "json_object"}
             )
 
             content = response['choices'][0]['message']['content']
+            # Чистка JSON от markdown
             clean_json = re.sub(r"```json|```", "", content).strip()
             data = json.loads(clean_json)
 
-            # Фоллбэки, если модель что-то забыла вернуть
             return {
                 "title": data.get("title", title or "Специалист"),
                 "specialization": data.get("specialization", spec or "Общее"),
@@ -91,7 +112,7 @@ class LocalLLM:
             }
 
         except Exception as e:
-            print(f"      ❌ LLM Error: {e}", flush=True)
+            print(f"      ❌ LLM Gen Error: {e}", flush=True)
             return {
                 "title": title, "specialization": spec,
                 "rewritten_text": text if text else "<p>Ошибка генерации</p>",

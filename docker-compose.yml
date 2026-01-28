@@ -1,37 +1,44 @@
 version: '3.9'
 
 services:
-  # 1. ETL: Готовит данные
+  # 1. ETL: Готовит данные (запускается один раз и выключается)
   etl:
     build: .
     volumes:
-      - ./dataset:/app/dataset
+      # Монтируем локальную папку data внутрь контейнера
+      - ./data:/app/data
       - ./.env:/app/.env
-    command: bash -c "python -m src.data.extract_descriptions && python -m src.data.merge_dataset && python -m src.data.process_metrics"
+    # Запускаем полный цикл обработки данных, как в README
+    command: >
+      bash -c "python src/data/prepare.py &&
+               python src/data/extract_descriptions.py &&
+               python src/data/extract_facts.py &&
+               python src/data/merge_dataset.py &&
+               python src/data/process_metrics.py"
 
-  # 2. API: Держит нейросети (Server)
+  # 2. API: Бэкенд (FastAPI)
   api:
     build: .
     ports:
       - "8000:8000"
     volumes:
-      - ./dataset:/app/dataset
+      - ./data:/app/data
       - ./.env:/app/.env
-    # Увеличиваем таймаут, так как LLM может думать долго
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
+    # Ждем завершения ETL, чтобы файлы точно появились
     depends_on:
-      - etl
+      etl:
+        condition: service_completed_successfully
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
 
-  # 3. DEMO: Интерфейс (Client)
+  # 3. DEMO: Интерфейс (Streamlit)
   demo:
     build: .
     ports:
       - "8501:8501"
     volumes:
-      - ./dataset:/app/dataset
+      - ./data:/app/data
     environment:
-      # ВОТ ЭТО КЛЮЧЕВОЙ МОМЕНТ ДЛЯ ПРАВИЛЬНОЙ АРХИТЕКТУРЫ
       - API_URL=http://api:8000
-    command: streamlit run src/demo/app.py
     depends_on:
       - api
+    command: streamlit run src/demo/app.py

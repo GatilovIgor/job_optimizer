@@ -15,3 +15,4 @@ hf_xet==1.2.0
 pytest==9.0.2
 httpx==0.28.1
 transformers
+llama-cpp-python==0.3.2
