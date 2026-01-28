@@ -1,39 +1,35 @@
 import os
-import re
-from huggingface_hub import hf_hub_download
+import pathlib
 
 try:
     from llama_cpp import Llama
 except ImportError:
     Llama = None
 
-from transformers import logging as transformers_logging
-
-transformers_logging.set_verbosity_error()
-os.environ["HF_XET_HIGH_PERFORMANCE"] = "0"
-
-
 class LocalLLM:
-    def __init__(self,
-                 repo_id="Qwen/Qwen2.5-1.5B-Instruct-GGUF",
-                 filename="qwen2.5-1.5b-instruct-q4_k_m.gguf",
-                 n_ctx=2048):
-
+    def __init__(self, n_ctx=4096):
         if Llama is None:
             raise ImportError("Please install llama-cpp-python")
 
-        print(f"📦 checking model: {filename}...", flush=True)
-        try:
-            model_path = hf_hub_download(repo_id=repo_id, filename=filename)
+        # 1. Находим путь к модели
+        # Поднимаемся от src/rag/llm.py до корня проекта
+        root_dir = pathlib.Path(__file__).resolve().parent.parent.parent
+        model_path = root_dir / "models" / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
 
+        print(f"📦 Loading local model: {model_path}...", flush=True)
+
+        if not model_path.exists():
+            raise FileNotFoundError(f"❌ Model file not found at: {model_path}\nPlease put the .gguf file in the 'models' folder.")
+
+        try:
             self.llm = Llama(
-                model_path=model_path,
+                model_path=str(model_path), # Путь к вашему файлу
                 n_ctx=n_ctx,
                 n_gpu_layers=-1,
                 n_threads=6,
                 verbose=False
             )
-            print("📦 Model loaded!", flush=True)
+            print("📦 Llama-3.2-3B Loaded!", flush=True)
         except Exception as e:
             print(f"❌ Failed to load LLM: {e}")
             self.llm = None
@@ -42,41 +38,47 @@ class LocalLLM:
         if not self.llm:
             return {"raw_response": "Ошибка: Модель не загружена"}
 
-        print("      [LLM] Generating (Text Mode)...", flush=True)
+        print("      [Llama] Generating...", flush=True)
 
-        # Контекст
-        ref_text = ""
-        if references:
-            ref_content = references[0].get('html_text', '')[:800]
-            ref_text = f"ПРИМЕР (СТИЛЬ):\n{ref_content}..."
-
-        issues_str = ", ".join(issues) if issues else "Улучши структуру и продающий стиль."
         title = user_vacancy.get('title', 'Сотрудник')
         text = user_vacancy.get('text', '')
 
         if len(text) < 100:
-            text += "\n(Это черновик. Придумай полноценное описание с обязанностями, требованиями и условиями.)"
+            text += f"\n(Информация скупая. Придумай профессиональные обязанности и требования для роли '{title}')"
 
-        # ПРОМПТ БЕЗ JSON (Просим просто текст)
         system_prompt = (
-            "Ты — опытный HR-редактор. Напиши ЛУЧШЕЕ описание вакансии на русском языке.\n"
-            "Формат ответа СТРОГО такой:\n"
-            "ЗАГОЛОВОК: [Название должности]\n"
-            "СФЕРА: [Сфера деятельности]\n"
-            "ОПИСАНИЕ:\n"
-            "[Вступление]\n"
-            "<h3>Обязанности:</h3>\n<ul><li>...</li></ul>\n"
-            "<h3>Требования:</h3>\n<ul><li>...</li></ul>\n"
-            "<h3>Условия:</h3>\n<ul><li>...</li></ul>"
+            "You are a professional HR Specialist. Output MUST be in Russian.\n"
+            "Follow the structure exactly."
         )
 
         user_message = (
-            f"{ref_text}\n\n"
-            f"ЗАДАЧА: Исправь и дополни вакансию.\n"
-            f"Текущая должность: {title}\n"
-            f"Исходный текст: {text}\n"
-            f"Что исправить: {issues_str}\n\n"
-            "Начинай ответ сразу с поля 'ЗАГОЛОВОК:'."
+            f"Напиши подробную вакансию: {title}.\n"
+            f"Черновик: {text}\n\n"
+            "СТРУКТУРА ОТВЕТА:\n"
+            "ЗАГОЛОВОК: [Должность]\n"
+            "СФЕРА: [Сфера]\n"
+            "ОПИСАНИЕ:\n"
+            "<p>[Вступление]</p>\n"
+            "<h3>Обязанности:</h3>\n"
+            "<ul>\n"
+            "<li>[Пункт 1]</li>\n"
+            "<li>[Пункт 2]</li>\n"
+            "<li>[Пункт 3]</li>\n"
+            "<li>[Пункт 4]</li>\n"
+            "<li>[Пункт 5]</li>\n"
+            "</ul>\n"
+            "<h3>Требования:</h3>\n"
+            "<ul>\n"
+            "<li>[Пункт 1]</li>\n"
+            "<li>[Пункт 2]</li>\n"
+            "<li>[Пункт 3]</li>\n"
+            "</ul>\n"
+            "<h3>Условия:</h3>\n"
+            "<ul>\n"
+            "<li>[Зарплата]</li>\n"
+            "<li>[График]</li>\n"
+            "<li>[Офис/Бонусы]</li>\n"
+            "</ul>"
         )
 
         try:
@@ -85,13 +87,10 @@ class LocalLLM:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_message}
                 ],
-                temperature=0.6,  # Больше креатива
-                max_tokens=1600,
+                temperature=0.7,
+                max_tokens=2000,
             )
-
-            raw_text = response['choices'][0]['message']['content']
-            return {"raw_response": raw_text}
-
+            return {"raw_response": response['choices'][0]['message']['content']}
         except Exception as e:
             print(f"      ❌ LLM Gen Error: {e}", flush=True)
             return {"raw_response": text}
