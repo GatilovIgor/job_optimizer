@@ -1,29 +1,25 @@
 [tool.poetry]
-name = "job-optimizer-mvp"
+name = "job-optimizer-ai"
 version = "0.1.0"
-description = "AI сервис для оптимизации вакансий"
-authors = ["Admin"]
-package-mode = false
+description = "Animal Classification Project"
+authors = ["Igor <igorbest555@gmail.com>"]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-
-fastapi = "*"
-uvicorn = "*"
-pydantic = "*"
-
-streamlit = "*"
-requests = "*"
-
-pandas = "*"
-numpy = "*"
-pyarrow = "*"
-tqdm = "*"
-
-scikit-learn = "*"
-sentence-transformers = "*"
-huggingface-hub = "*"
-python-dotenv = "*"
+transformers = "5.0.0"
+fastapi = "0.128.0"
+streamlit = "1.53.1"
+pandas = "2.3.3"
+numpy = "2.4.1"
+pillow = "12.1.0"
+scikit-learn = "1.8.0"
+scipy = "1.17.0"
+sentence-transformers = "5.2.2"
+uvicorn = "0.40.0"
+requests = "2.32.5"
+python-dotenv = "1.2.1"
+python-multipart = "0.0.20"
+pydantic = "2.12.5"
 
 [build-system]
 requires = ["poetry-core"]

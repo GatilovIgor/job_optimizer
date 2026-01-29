@@ -1,9 +1,8 @@
-.git
-.idea
 .venv
+.git
 __pycache__
 *.pyc
-# Игнорируем данные при сборке образа, так как мы монтируем их через volumes
-data/
-# Игнорируем локальный .env, он тоже монтируется отдельно
 .env
+data/*.parquet
+data/*.index
+data/fact_vacancies_raw.csv

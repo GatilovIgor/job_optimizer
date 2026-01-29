@@ -1,32 +1,28 @@
-# Шаг 1: Используем официальный базовый образ Python 3.11
-# Это решает первоначальную проблему с несовместимостью версий.
 FROM python:3.11-slim
 
-# Установка системных зависимостей, которые могут понадобиться для сборки пакетов
-# (например, для psycopg2-binary или numpy).
-# В ваших логах был похожий шаг для сервиса 'etl', его полезно иметь и здесь.
-RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_NO_CACHE_DIR=1
 
-# Шаг 2: Устанавливаем рабочую директорию внутри контейнера.
-# Весь последующий код будет выполняться в этой папке.
+# Ставим корректные системные либы
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl build-essential gcc libgomp1 libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Шаг 3: Копируем файл с зависимостями в рабочую директорию.
-# Мы делаем это отдельным шагом, чтобы Docker мог кэшировать этот слой.
-# Пересборка будет быстрее, если вы меняете только код, а не зависимости.
+# Копируем список зависимостей
 COPY requirements.txt .
 
-# Шаг 4: Устанавливаем Python-зависимости.
-# --timeout=600: Увеличиваем время ожидания до 600 секунд (10 минут) для
-# предотвращения ошибок тайм-аута при скачивании больших файлов, как torch.
-# --no-cache-dir: Отключаем кэш pip, чтобы не раздувать размер образа.
-RUN pip install --timeout=600 --no-cache-dir -r requirements.txt
+# Устанавливаем всё (строго CPU версии)
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Шаг 5: Копируем весь остальной код вашего приложения в рабочую директорию.
+# Копируем код
 COPY . .
 
-# Шаг 6: Указываем команду для запуска вашего приложения.
-# Замените 'main:app' на имя вашего файла и экземпляра FastAPI.
-# Если это Streamlit-приложение, команда может быть: ["streamlit", "run", "your_app.py"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]
+RUN mkdir -p /app/data /root/.cache/huggingface
 
+EXPOSE 8000
+EXPOSE 8501

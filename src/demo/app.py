@@ -1,10 +1,12 @@
 import streamlit as st
 import requests
+import os
 
 # --- 1. Настройка страницы ---
 st.set_page_config(page_title="Job Optimizer MVP", layout="wide", page_icon="🚀")
 
-API_URL = "http://127.0.0.1:8000/optimize"
+# БЕРЕМ URL ИЗ .ENV ИЛИ ИСПОЛЬЗУЕМ LOCALHOST (если запуск без Docker)
+API_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/optimize")
 
 # --- 2. Инициализация полей (Session State) ---
 if 'in_profile' not in st.session_state: st.session_state['in_profile'] = ""

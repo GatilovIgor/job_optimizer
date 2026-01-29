@@ -1,44 +1,53 @@
-version: '3.9'
-
 services:
-  # 1. ETL: Готовит данные (запускается один раз и выключается)
-  etl:
+  # 0. Подготовка данных и скачивание моделей
+  data-prepper:
     build: .
+    container_name: job-opt-prepper
     volumes:
-      # Монтируем локальную папку data внутрь контейнера
       - ./data:/app/data
-      - ./.env:/app/.env
-    # Запускаем полный цикл обработки данных, как в README
-    command: >
-      bash -c "python src/data/prepare.py &&
-               python src/data/extract_descriptions.py &&
-               python src/data/extract_facts.py &&
-               python src/data/merge_dataset.py &&
-               python src/data/process_metrics.py"
+      - hf_cache:/root/.cache/huggingface
+    env_file: .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN}  # Передаем токен для авторизации в Hugging Face
+    command: python src/data/prepare.py
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-  # 2. API: Бэкенд (FastAPI)
-  api:
+  # 1. Backend API (FastAPI)
+  backend:
     build: .
+    container_name: job-opt-backend
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./.env:/app/.env
-    # Ждем завершения ETL, чтобы файлы точно появились
+      - hf_cache:/root/.cache/huggingface
+    env_file: .env
+    environment:
+      - HF_TOKEN=${HF_TOKEN}  # Токен также нужен здесь для работы Transformers
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
     depends_on:
-      etl:
+      data-prepper:
         condition: service_completed_successfully
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-  # 3. DEMO: Интерфейс (Streamlit)
-  demo:
+  # 2. Frontend (Streamlit)
+  frontend:
     build: .
+    container_name: job-opt-frontend
     ports:
       - "8501:8501"
     volumes:
       - ./data:/app/data
+    env_file: .env
     environment:
-      - API_URL=http://api:8000
+      - BACKEND_URL=http://backend:8000/optimize  # Указываем фронтенду путь к бекенду
+    command: streamlit run src/demo/app.py --server.port 8501 --server.address 0.0.0.0
     depends_on:
-      - api
-    command: streamlit run src/demo/app.py
+      - backend
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  hf_cache:
