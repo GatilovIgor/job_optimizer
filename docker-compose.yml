@@ -21,6 +21,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+#      - .:/app                      #Для reload
       - hf_cache:/root/.cache/huggingface
     env_file: .env
     environment:
@@ -40,6 +41,7 @@ services:
       - "8501:8501"
     volumes:
       - ./data:/app/data
+#      - .:/app                      #Для reload
     env_file: .env
     environment:
       - BACKEND_URL=http://backend:8000/optimize  # Указываем фронтенду путь к бекенду
